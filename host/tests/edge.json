@@ -1,0 +1,3 @@
+{"empty":{},"emptyList":[],"esc":"a\"b\\c\/d\b\f\n\r\tu&é€😀","raw":"Привіт","nums":[0,-1.5e3,12345678901,true,false,null],
+ "a_key_that_is_much_longer_than_capacity":1,
+ "deep":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[{"x":1}]]]]]]]]]]]]]]]]]]]]]]]]]]]]],"after":"ok"}

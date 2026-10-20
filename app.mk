@@ -1,0 +1,6 @@
+APP_NAME := PalmView
+APP_ID := PalmView
+APP_CREATOR := PVew
+APP_TYPE := appl
+APP_VERSION := 0.1.0
+APP_DB_VERSION := 1

@@ -1,0 +1,176 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+
+#ifndef PALMVIEW_PLAYBACK_H
+#define PALMVIEW_PLAYBACK_H
+
+#include <PalmOS.h>
+#include "arm_module.h"
+#include "mp4_read.h"
+#include "mp4_stream.h"
+#include "store.h"
+
+/* Plays a saved MP4. The native ARM module decodes a few video frames
+ * ahead and converts each one straight into the screen's framebuffer when
+ * its time comes. AAC sound goes through a PCM ring that a native Palm OS
+ * sound stream callback drains; the frames it has played set the clock.
+ * Without sound, the clock is the system tick count.
+ *
+ * When video falls behind, quality drops a level at a time (see
+ * kLevelFlags in playback.c) and comes back once there is time to spare.
+ * If it is still far behind, video skips ahead to the next keyframe.
+ *
+ * It can also play YouTube's two streams while they download (a
+ * StreamFeed). The compressed data waits in RAM rings, and the clock stops
+ * to buffer whenever either stream runs dry. */
+
+#define PLAYBACK_LEVELS 4
+
+struct StreamFeed;
+
+typedef struct Playback {
+    ArmModule module;
+    Boolean moduleLoaded;
+    UInt8 *arenaP;
+    Mp4Reader *readerP;
+    UInt8 *sampleP;
+    UInt16 volume;
+    FileRef file;
+    UInt32 fileSize;
+    Boolean fileOpen;
+    Boolean decoderOpen;
+
+    /* Output rectangle in the framebuffer, native pixels, and the area it
+     * is fitted into */
+    UInt8 *screenP;
+    UInt32 rowBytes;
+    UInt16 width;
+    UInt16 height;
+    UInt32 rgbFlags;
+    UInt8 *bitsP;
+    UInt32 areaX, areaY, areaW, areaH;
+
+    /* Streaming */
+    struct StreamFeed *feedP;   /* 0 when playing a file */
+    Mp4Stream streams[2];       /* video, audio */
+    UInt8 *ringsP[2];
+    UInt32 ringSizes[2];
+    Boolean buffering;          /* the clock waits for data */
+    Boolean videoWaiting;       /* the next sample has not arrived */
+    Boolean audioWaiting;
+    UInt32 bufferings;
+    UInt32 lastFeed;            /* ticks */
+    const Char *errorP;         /* why streaming stopped */
+
+    /* Clock: ticks since clockBase plus clockOffsetMs, or pausedMs when
+     * paused. With sound, clockOffsetMs follows the sound played. */
+    Boolean playing;
+    Boolean ended;
+    Boolean started;
+    UInt32 clockBase;
+    Int32 clockOffsetMs;
+    UInt32 pausedMs;
+    UInt32 firstPts;
+    UInt32 timescale;
+
+    /* Sound */
+    Boolean ringOpen;           /* the decoder and PCM ring exist */
+    Boolean soundOn;            /* the stream exists */
+    Boolean soundStarted;
+    Boolean soundInputEnded;
+    SndStreamRef stream;
+    UInt32 sampleRate;
+    UInt32 ringFrames;
+    UInt32 soundBuffered;       /* frames decoded, not yet played */
+    UInt32 soundPlayed;
+    UInt32 soundUnderruns;
+    UInt32 soundLastRequest;
+    UInt32 decoderRate;         /* 0 until the first packet */
+    UInt32 latencyFrames;       /* handed to the OS but not heard yet */
+    UInt32 lastPlayed;
+    UInt32 audioErrors;
+    const Char *soundError;     /* why there is no sound */
+
+    /* Decoder state */
+    UInt32 queued;          /* decoded frames waiting */
+    UInt32 frontPts;        /* pts of the oldest */
+    Boolean draining;
+    Boolean inputEnded;
+    UInt32 decodeMs;        /* recent decode time per sample */
+    Boolean catchingUp;     /* skipping to a keyframe */
+    UInt32 catchUpMs;
+
+    UInt16 level;
+    UInt16 skippedInRow;
+    UInt16 calmWindows;
+    UInt16 calmNeeded;      /* grows when a level does not hold */
+    UInt32 lastLevelDown;   /* ticks, 0 if never */
+    UInt16 levelChanges;
+    Boolean settling;       /* just resumed: this window keeps the level */
+
+    /* Statistics; the window restarts every second */
+    UInt32 windowStart;
+    UInt32 windowBusy;      /* ticks spent decoding and drawing */
+    UInt16 windowFrames;
+    UInt16 windowShown;
+    UInt16 windowLate;
+    UInt32 shown;
+    UInt32 skipped;
+    UInt32 catchUps;
+    UInt32 decodeErrors;
+    UInt16 fps10;           /* frames shown per second, times 10 */
+    UInt16 cpuPercent;
+
+    /* Diagnostics for the details view, per second */
+    UInt16 windowLoops;     /* PlaybackStep calls: event loop turns */
+    UInt16 windowSteps;     /* units of work */
+    Int32 windowDiffMin;    /* sound clock corrections, ms */
+    Int32 windowDiffMax;
+    UInt16 loopsPerSecond;
+    UInt16 stepsPerSecond;
+    Int32 diffMin;
+    Int32 diffMax;
+    UInt32 snaps;
+    UInt32 lateTotal;
+    UInt32 windowNet;       /* ticks spent on the network */
+    UInt32 windowReceived;  /* bytes received when the window began */
+    UInt16 netPercent;
+    UInt16 netKBps;
+
+    /* The longest stalls since playback started, in ticks: a network
+     * turn, a decode, and time away from PlaybackStep beyond the wait it
+     * asked for */
+    UInt32 peakNet;
+    UInt32 peakDecode;
+    UInt32 peakAway;
+    UInt32 stepEnd;
+    Int32 stepWait;
+} Playback;
+
+/* Opens pathP on the card and starts the decoder. Returns 0, or a message
+ * saying what went wrong. Call PlaybackClose either way. */
+const Char *PlaybackOpen(Playback *p, const Char *pathP);
+/* Streams instead. The decoders start once the first seconds are in. The
+ * feed must outlive the playback. */
+const Char *PlaybackOpenStream(Playback *p, struct StreamFeed *feedP);
+void PlaybackClose(Playback *p);
+
+/* Fits the video into boundsP (standard coordinates on the display).
+ * Returns 0, or a message if the screen cannot be drawn to directly. */
+const Char *PlaybackAttachScreen(Playback *p, const RectangleType *boundsP);
+
+/* Plays from the start again once the video has ended. */
+void PlaybackPlay(Playback *p);
+void PlaybackPause(Playback *p);
+
+/* Does whatever is due: decodes, draws or waits. Returns the ticks until
+ * it needs to run again, as an EvtGetEvent timeout. */
+Int32 PlaybackStep(Playback *p);
+
+UInt32 PlaybackPositionMs(const Playback *p);
+UInt32 PlaybackDurationMs(const Playback *p);
+/* Playback time in a stream's ring; 0xFFFFFFFF once all of it is in. */
+UInt32 PlaybackBufferedMs(const Playback *p, UInt16 track);
+/* Why streaming stopped, or 0. */
+const Char *PlaybackError(const Playback *p);
+
+#endif

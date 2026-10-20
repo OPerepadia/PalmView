@@ -1,0 +1,38 @@
+#include "resource.h"
+
+DATA "code" ID 1 "code0001.bin"
+// SysAppPrefsType: priority 30, 32 KiB stack, 4 KiB minimum free heap.
+HEX "pref" ID 0 0x00 0x1e 0x00 0x00 0x80 0x00 0x00 0x00 0x10 0x00
+
+FORM ID MainForm AT (0 0 160 160)
+BEGIN
+    TITLE "PalmView Bench"
+    FIELD ID LogField AT (2 16 148 80) NONEDITABLE MULTIPLELINES MAXCHARS 2047
+    SCROLLBAR ID LogScrollBar AT (152 16 7 80) VALUE 0 MIN 0 MAX 0 PAGESIZE 6
+    GADGET ID PreviewGadget AT (2 100 80 45)
+    POPUPTRIGGER "(no files)" ID FileTrigger AT (84 100 74 12) LEFTANCHOR
+    LIST "" ID FileList AT (2 40 156 100) VISIBLEITEMS 9 NONUSABLE
+    POPUPLIST ID FileTrigger FileList
+    POPUPTRIGGER "Full decode" ID ModeTrigger AT (84 114 74 12) LEFTANCHOR
+    LIST "Full decode" "No deblocking" "Skip B-frames" ID ModeList AT (84 114 74 34) VISIBLEITEMS 3 NONUSABLE
+    POPUPLIST ID ModeTrigger ModeList
+    BUTTON "Info" ID InfoButton AT (84 132 34 12)
+    BUTTON "Run" ID RunButton AT (122 132 36 12)
+END
+
+ALERT ID RomIncompatibleAlert
+ERROR
+BEGIN
+    TITLE "Palm OS 5 Required"
+    MESSAGE "PalmView Bench needs an ARM Palm with Palm OS 5."
+    BUTTONS "OK"
+END
+
+ICONFAMILYEX ID AppIcon
+BEGIN
+    BITMAP "icon-color.bmp" BPP 8 TRANSPARENT 255 0 255
+    BITMAP "icon-color-hd.bmp" BPP 8 DENSITY 144 TRANSPARENT 255 0 255
+END
+APPLICATIONICONNAME ID 1000 "PV Bench"
+VERSION ID AppVersionString "@APP_VERSION@"
+STRING ID AppVersionString "@APP_VERSION@"

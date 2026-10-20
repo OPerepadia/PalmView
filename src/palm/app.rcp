@@ -1,0 +1,92 @@
+#include "resource.h"
+
+DATA "code" ID 1 "code0001.bin"
+// Google Trust Services WR2 + WE2 issuers (tools/update-certs.sh).
+DATA "cert" ID TrustCertificates "../../certs/google.pem"
+// SysAppPrefsType: priority 30, 32 KiB stack, 4 KiB minimum free heap.
+HEX "pref" ID 0 0x00 0x1e 0x00 0x00 0x80 0x00 0x00 0x00 0x10 0x00
+
+FORM ID MainForm AT (0 0 160 160)
+MENUID MainMenuBar
+BEGIN
+    TITLE "PalmView"
+    FIELD ID SearchField AT (2 17 84 12) EDITABLE UNDERLINED SINGLELINE MAXCHARS 63
+    BUTTON "Search" ID SearchButton AT (89 16 35 12)
+    BUTTON "Saved" ID SavedButton AT (127 16 31 12)
+    LIST "" ID ResultList AT (0 32 160 110) VISIBLEITEMS 10
+    FIELD ID StatusField AT (2 146 140 12) NONEDITABLE SINGLELINE MAXCHARS 79
+    GRAFFITISTATEINDICATOR AT (148 147)
+END
+
+FORM ID DetailForm AT (0 0 160 160)
+BEGIN
+    TITLE "Video"
+    FIELD ID InfoField AT (2 16 148 74) NONEDITABLE MULTIPLELINES MAXCHARS 383
+    SCROLLBAR ID InfoScrollBar AT (152 16 7 74) VALUE 0 MIN 0 MAX 0 PAGESIZE 6
+    FIELD ID ProgressField AT (2 94 156 34) NONEDITABLE MULTIPLELINES MAXCHARS 191
+    GADGET ID ProgressGadget AT (2 131 156 8)
+    BUTTON "Download" ID DownloadButton AT (2 145 50 12)
+    BUTTON "Cancel" ID CancelButton AT (56 145 40 12)
+    BUTTON "Play" ID PlayButton AT (56 145 40 12)
+    BUTTON "Back" ID BackButton AT (118 145 40 12)
+END
+
+FORM ID SavedForm AT (0 0 160 160)
+BEGIN
+    TITLE "Saved Videos"
+    LIST "" ID SavedList AT (0 16 160 121) VISIBLEITEMS 11
+    FIELD ID SavedStatusField AT (2 146 112 12) NONEDITABLE SINGLELINE MAXCHARS 47
+    BUTTON "Back" ID SavedBackButton AT (118 145 40 12)
+END
+
+// The ARM decoder draws into the gadget's area of the screen directly.
+FORM ID PlayForm AT (0 0 160 160)
+BEGIN
+    GADGET ID PlayVideoGadget AT (0 0 160 90)
+    FIELD ID PlayTitleField AT (2 93 156 12) NONEDITABLE SINGLELINE MAXCHARS 63
+    FIELD ID PlayStatusField AT (2 107 156 34) NONEDITABLE MULTIPLELINES MAXCHARS 127
+    BUTTON "Pause" ID PlayPauseButton AT (2 145 40 12)
+    BUTTON "Done" ID PlayDoneButton AT (118 145 40 12)
+END
+
+MENU ID MainMenuBar
+BEGIN
+    PULLDOWN "Options"
+    BEGIN
+        MENUITEM "Reset YouTube ID" ID MenuResetVisitor
+        MENUITEM "About PalmView" ID MenuAbout
+    END
+END
+
+ALERT ID AboutAlert
+INFORMATION
+BEGIN
+    TITLE "PalmView"
+    MESSAGE "Version @APP_VERSION@\n144p YouTube for Palm OS.\nVideos are saved to /PalmView on the card. Play them here or in CorePlayer.\nGPL-3.0-or-later. Uses PalmTLS and FFmpeg."
+    BUTTONS "OK"
+END
+
+ALERT ID LibraryMissingAlert
+ERROR
+BEGIN
+    TITLE "PalmTLS Required"
+    MESSAGE "Install PalmTLSArm.prc in handheld memory, then try again. Error: ^1"
+    BUTTONS "OK"
+END
+
+ALERT ID RomIncompatibleAlert
+ERROR
+BEGIN
+    TITLE "Palm OS 5 Required"
+    MESSAGE "PalmView needs Palm OS 5 and a memory card."
+    BUTTONS "OK"
+END
+
+ICONFAMILYEX ID AppIcon
+BEGIN
+    BITMAP "icon-color.bmp" BPP 8 TRANSPARENT 255 0 255
+    BITMAP "icon-color-hd.bmp" BPP 8 DENSITY 144 TRANSPARENT 255 0 255
+END
+APPLICATIONICONNAME ID 1000 "PalmView"
+VERSION ID AppVersionString "@APP_VERSION@"
+STRING ID AppVersionString "@APP_VERSION@"
