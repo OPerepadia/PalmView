@@ -24,11 +24,23 @@
 #define CLIENT_FILE STORE_DIR "/client.txt"
 #define CLIENT_FILE_CAPACITY 1024
 #define PREFS_ID 0
-#define PREFS_VERSION 1
+#define PREFS_VERSION 2
 #define MAX_SAVED 32
 #define SAVED_NAME_CAPACITY 64
 /* Redirects in a row a download follows. */
 #define MAX_REDIRECTS 5
+/* palmOne's 5-way reports the centre button this way (PalmChars.h). */
+#define vchrNavChange 0x0503
+#define navBitSelect 0x0010
+#define navChangeSelect 0x1000
+/* Level 0 is silent. */
+#define VOLUME_LEVELS 11
+#define VOLUME_DEFAULT 6
+
+/* 3 dB apart; 1024 is unity gain. */
+static const UInt16 kVolumeGain[VOLUME_LEVELS] = {
+    0, 45, 64, 91, 128, 181, 256, 362, 512, 724, 1024
+};
 
 static const UInt16 kVideoItags[] = { 160, 0 };
 static const UInt16 kAudioItags[] = { 140, 139, 0 };
@@ -42,6 +54,7 @@ typedef enum Task {
 
 typedef struct AppPrefs {
     Char visitor[YT_VISITOR_CAPACITY];
+    UInt16 volume;              /* level, below VOLUME_LEVELS */
 } AppPrefs;
 
 typedef struct AppState {
@@ -100,6 +113,8 @@ typedef struct AppState {
     Int32 playWait;             /* ticks until playback needs to run */
     UInt32 playStatusTicks;
     Boolean resumeOnEnter;
+    Boolean prefsChanged;       /* saved when the app stops */
+    UInt32 lastCentre;          /* ticks of the last 5-way centre press */
     UInt16 playView;            /* tapping the status shows diagnostics */
     Char playPath[STORE_PATH_CAPACITY];     /* empty to stream */
     Char playTitle[64];
@@ -293,9 +308,12 @@ static void LoadSettings(AppState *s)
     UInt16 length = 0;
     MemSet(&s->prefs, sizeof(s->prefs), 0);
     if (PrefGetAppPreferences(APP_CREATOR, PREFS_ID, &s->prefs, &size, true) ==
-            noPreferenceFound || size != sizeof(s->prefs))
+            noPreferenceFound || size != sizeof(s->prefs)) {
         MemSet(&s->prefs, sizeof(s->prefs), 0);
+        s->prefs.volume = VOLUME_DEFAULT;
+    }
     s->prefs.visitor[sizeof(s->prefs.visitor) - 1] = '\0';
+    if (s->prefs.volume >= VOLUME_LEVELS) s->prefs.volume = VOLUME_DEFAULT;
     YtClientDefaults(&s->client);
     /* A client.txt on the card overrides the client when YouTube changes
      * what it accepts; see README. */
@@ -954,6 +972,15 @@ static void ClearVideoArea(void)
     WinDrawRectangle(&bounds, 0);
 }
 
+static void SetVolume(AppState *s, UInt16 level)
+{
+    if (level == s->prefs.volume) return;
+    s->prefs.volume = level;
+    s->prefsChanged = true;
+    if (s->playbackP != 0)
+        PlaybackSetVolume(s->playbackP, kVolumeGain[level]);
+}
+
 static void AppendSigned(Char *dstP, UInt16 capacity, Int32 value)
 {
     Append(dstP, capacity, value < 0 ? "-" : "+");
@@ -1144,6 +1171,7 @@ static void OpenPlayForm(AppState *s)
 
     errorP = StartPlayback(s);
     if (errorP == 0) {
+        PlaybackSetVolume(s->playbackP, kVolumeGain[s->prefs.volume]);
         GetVideoBounds(&bounds);
         WinGetBounds(FrmGetWindowHandle(formP), &formBounds);
         bounds.topLeft.x += formBounds.topLeft.x;
@@ -1395,6 +1423,28 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                     eventP->data.keyDown.chr == vchrPageUp ? winUp : winDown, 9);
                 return true;
             }
+            if (OnForm(PlayForm)) {
+                WChar c = eventP->data.keyDown.chr;
+                if (c == vchrPageUp || c == vchrRockerUp) {
+                    if (s->prefs.volume < VOLUME_LEVELS - 1)
+                        SetVolume(s, s->prefs.volume + 1);
+                    return true;
+                }
+                if (c == vchrPageDown || c == vchrRockerDown) {
+                    if (s->prefs.volume > 0) SetVolume(s, s->prefs.volume - 1);
+                    return true;
+                }
+                /* One press may arrive as both of these. */
+                if (c == vchrRockerCenter || (c == vchrNavChange &&
+                        (eventP->data.keyDown.keyCode & (navBitSelect |
+                            navChangeSelect)) == (navBitSelect | navChangeSelect))) {
+                    UInt32 now = TimGetTicks();
+                    if (now - s->lastCentre >= SysTicksPerSecond() / 4)
+                        TogglePause(s);
+                    s->lastCentre = now;
+                    return true;
+                }
+            }
             if (OnForm(DetailForm) && (eventP->data.keyDown.chr == vchrPageUp ||
                     eventP->data.keyDown.chr == vchrPageDown)) {
                 ScrollInfo(eventP->data.keyDown.chr == vchrPageUp ? -5 : 5);
@@ -1461,6 +1511,9 @@ static Err StartApplication(AppState *s)
 static void StopApplication(AppState *s)
 {
     ClosePlayback(s);
+    if (s->prefsChanged)
+        PrefSetAppPreferences(APP_CREATOR, PREFS_ID, PREFS_VERSION, &s->prefs,
+            sizeof(s->prefs), true);
     if (s->jobP != 0) {
         NetJobCancel(s->jobP);
         while (s->jobP != 0) NetJobStep(&s->jobP);

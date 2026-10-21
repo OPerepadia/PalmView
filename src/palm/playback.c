@@ -22,8 +22,6 @@
 #define SOUND_BUFFER_FRAMES 2048UL
 #define MAX_PACKET_FRAMES 2048UL
 #define SOUND_PREFILL_FRAMES 8192UL
-/* 1024 is unity gain. */
-#define SOUND_VOLUME 256
 
 /* A frame shown later than LATE_MS counts as late. Frames later than
  * SKIP_MS are not drawn, but never more than MAX_SKIPPED in a row. */
@@ -227,7 +225,7 @@ static void OpenSound(Playback *p)
         p->ringOpen = false;
         return;
     }
-    SndStreamSetVolume(p->stream, SOUND_VOLUME);
+    SndStreamSetVolume(p->stream, p->gain);
     p->soundOn = true;
 }
 
@@ -954,6 +952,12 @@ UInt32 PlaybackDurationMs(const Playback *p)
 {
     const Mp4ReadTrack *t = &p->readerP->video;
     return t->timescale != 0 ? ScaleToMs(t->duration, t->timescale) : 0;
+}
+
+void PlaybackSetVolume(Playback *p, UInt16 gain)
+{
+    p->gain = gain;
+    if (p->soundOn) SndStreamSetVolume(p->stream, gain);
 }
 
 const Char *PlaybackError(const Playback *p)

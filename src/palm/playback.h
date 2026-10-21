@@ -78,6 +78,7 @@ typedef struct Playback {
     Boolean soundStarted;
     Boolean soundInputEnded;
     SndStreamRef stream;
+    UInt16 gain;
     UInt32 sampleRate;
     UInt32 ringFrames;
     UInt32 soundBuffered;       /* frames decoded, not yet played */
@@ -161,6 +162,9 @@ const Char *PlaybackAttachScreen(Playback *p, const RectangleType *boundsP);
 /* Plays from the start again once the video has ended. */
 void PlaybackPlay(Playback *p);
 void PlaybackPause(Playback *p);
+/* 1024 is unity gain. PlaybackOpen and PlaybackOpenStream set it to 0
+ * (silent), so set it after opening. */
+void PlaybackSetVolume(Playback *p, UInt16 gain);
 
 /* Does whatever is due: decodes, draws or waits. Returns the ticks until
  * it needs to run again, as an EvtGetEvent timeout. */

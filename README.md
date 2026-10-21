@@ -42,7 +42,10 @@ You need Palm OS 5, Wi-Fi and an SD card. On the TX:
    **Play** to watch it, or open it in CorePlayer.
 
 **Saved** on the main screen lists the videos on the card; tap one to play
-it. In the player, tap the picture or **Pause** to pause.
+it. In the player, tap the picture, **Pause** or the 5-way centre to pause.
+
+Press up and down on the 5-way navigator to change the volume. PalmView
+remembers it.
 
 **Cancel** stops a download; tap **Download** again to resume it. Partial
 streams stay in `/PalmView` as `<id>.video.mp4` and `<id>.audio.mp4` until
