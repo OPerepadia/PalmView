@@ -217,6 +217,17 @@ decodes the test videos exactly like the host build.
 callback the way Palm OS would: on another stack, with a foreign `r9`. The
 sound that comes out must match the decoder's checksum.
 
+To see where the time goes, profile by function:
+
+```
+deps/venv/bin/python host/tests/arm_emulate.py build/arm/res VIDEO.mp4 \
+    --seconds 5 --profile build/arm/pass2.map
+```
+
+It prints instruction counts per function and per object file, separately
+for video decoding, RGB conversion and audio. Video decoding includes a
+checksum the emulator asks for and the player does not.
+
 `make test-playback` runs `playback.c` on the PC against a simulated Palm
 clock, with decode costs from PalmView Bench and a simulated sound stream.
 It checks that every frame is shown or skipped, that all the sound plays,
@@ -238,6 +249,10 @@ It also runs `stream_feed.c` against a fake network that serves the two
 files, reuses or drops connections, and checks that only one request is in
 flight, none asks for more than fits, reads are paced, and both streams
 arrive whole.
+
+`make test` also checks the RGB565 conversion pixel by pixel against a
+floating-point reference, for every scale of small sizes, both byte orders
+and padded rows.
 
 ## Build
 

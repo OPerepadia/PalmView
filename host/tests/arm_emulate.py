@@ -5,10 +5,14 @@ the way the Palm loader does, and decodes the start of an MP4 through the
 same ArmCall protocol. Prints checksums to compare with build/host/bench.
 
   arm_emulate.py RES_DIR FILE.mp4 [--seconds S] [--count] [--png OUT.png]
-                 [--queue N] [--sound]
+                 [--queue N] [--sound] [--profile PASS2.MAP [--top N]]
 
 Segments are placed out of order at 4-byte (not 8-byte) aligned addresses,
 which is all Palm OS guarantees for resources.
+
+--profile counts instructions per function, using the link map armlink.py's
+second pass writes (build/arm/pass2.map), and prints where video decoding,
+RGB conversion and audio decoding spend them.
 
 --sound sends the audio through the sound ring and drains it by calling the
 stream callback as Palm OS would: on another stack, with a foreign r9. It
@@ -16,6 +20,10 @@ also checks that a paused ring gives silence and holds the clock.
 """
 
 import argparse
+import bisect
+import collections
+import os
+import re
 import struct
 import subprocess
 import sys
@@ -50,12 +58,79 @@ DEC_CHECKSUM = 0x80
 DEC_RGB_BIG_ENDIAN = 0x01
 
 
+class Profile:
+    """Maps emulated code addresses back to functions and object files."""
+
+    def __init__(self, map_path, segments, sizes):
+        self.segments, self.sizes = segments, sizes
+        self.bases = {}
+        functions = []
+        pending = None
+        line_re = re.compile(r"^\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)\s+(\S+)")
+        with open(map_path) as handle:
+            for line in handle:
+                seg = re.match(r"^\.seg(\d+)\s+0x([0-9a-f]+)", line)
+                if seg:
+                    self.bases[int(seg.group(1))] = int(seg.group(2), 16)
+                    continue
+                one = re.match(r"^ \.text\.(\S+)\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)\s+(\S+)",
+                               line)
+                if one:
+                    functions.append((int(one.group(2), 16), int(one.group(3), 16),
+                                      one.group(1), one.group(4)))
+                    pending = None
+                    continue
+                head = re.match(r"^ \.text\.(\S+)\s*$", line)
+                if head:
+                    pending = head.group(1)
+                    continue
+                rest = line_re.match(line)
+                if pending and rest:
+                    functions.append((int(rest.group(1), 16), int(rest.group(2), 16),
+                                      pending, rest.group(3)))
+                pending = None
+        functions.sort()
+        self.starts = [f[0] for f in functions]
+        self.functions = functions
+
+    def locate(self, address):
+        for i, start in enumerate(self.segments):
+            if start <= address < start + self.sizes[i]:
+                elf = self.bases[i] + address - start
+                k = bisect.bisect_right(self.starts, elf) - 1
+                if k >= 0:
+                    begin, size, name, path = self.functions[k]
+                    if elf < begin + size:
+                        member = re.search(r"\(([^)]+)\)$", path)
+                        return name, member.group(1) if member else os.path.basename(path)
+                return "?", "?"
+        return "?", "?"
+
+    def report(self, title, blocks, divisor, unit, top):
+        by_function = collections.Counter()
+        by_object = collections.Counter()
+        for address, count in blocks.items():
+            name, obj = self.locate(address)
+            by_function[(name, obj)] += count
+            by_object[obj] += count
+        total = sum(by_function.values())
+        if total == 0:
+            return
+        print(f"profile: {title}, {total / divisor / 1e6:.2f} M instructions {unit}")
+        for (name, obj), count in by_function.most_common(top):
+            print(f"  {100 * count / total:5.1f}%  {count / divisor / 1e6:6.3f} M  "
+                  f"{name}  ({obj})")
+        print("  by object file:")
+        for obj, count in by_object.most_common(top // 2):
+            print(f"  {100 * count / total:5.1f}%  {count / divisor / 1e6:6.3f} M  {obj}")
+
+
 def signed(value):
     return value - (1 << 32) if value & 0x80000000 else value
 
 
 class Module:
-    def __init__(self, res_dir, arena_size, count):
+    def __init__(self, res_dir, arena_size, count, profile_map=None):
         # RES_DIR is armlink.py's output directory or a finished PRC.
         if res_dir.endswith(".prc"):
             with open(res_dir, "rb") as handle:
@@ -89,12 +164,14 @@ class Module:
         self.uc.mem_map(CALL_ADDR, 0x100000)
         self.uc.mem_map(RETURN_ADDR, 0x1000)
         self.segments = []
+        sizes = []
         for i in range(nseg):
             code = read(f"armc{1001 + i}.bin")
             # Reverse order, misaligned by 4, 8 or 12 mod 16.
             address = CODE_BASE + (nseg - 1 - i) * 0x10000 + 4 + 4 * (i % 3)
             self.uc.mem_write(address, code)
             self.segments.append(address)
+            sizes.append(len(code))
         image = b"".join(read(f"armd{2001 + i}.bin") for i in range(ndata))
         if len(image) != image_size:
             sys.exit("data image size mismatch")
@@ -110,13 +187,17 @@ class Module:
         self.got = RW_BASE + got_offset
         self.entry = self.segments[0] + entry
         self.instructions = 0
-        if count:
+        self.blocks = collections.Counter()
+        self.profile = Profile(profile_map, self.segments, sizes) if profile_map else None
+        if count or self.profile:
             self.uc.hook_add(UC_HOOK_BLOCK, self._count)
         print(f"module: {nseg} segments, {rw_total} bytes writable, "
               f"{fixup_count} fixups, GOT at 0x{self.got:x}")
 
     def _count(self, uc, address, size, user):
         self.instructions += size // 4
+        if self.profile:
+            self.blocks[address] += size // 4
 
     def call(self, command, *args):
         words = [MAGIC, self.got, STACK_BASE + STACK_SIZE, CMD[command], 0]
@@ -233,11 +314,15 @@ def main():
     parser.add_argument("--png")
     parser.add_argument("--queue", type=int, default=1)
     parser.add_argument("--sound", action="store_true")
+    parser.add_argument("--profile", metavar="PASS2_MAP")
+    parser.add_argument("--top", type=int, default=20)
     args = parser.parse_args()
+    if args.profile:
+        args.count = True
 
     with open(args.mp4, "rb") as handle:
         data = handle.read()
-    m = Module(args.res, args.arena, args.count)
+    m = Module(args.res, args.arena, args.count, args.profile)
     result, _ = m.call("ping", *range(1, 9))
     print(f"ping: {result} (expect 36)")
     result, out = m.call("init", ARENA_BASE, args.arena, STACK_BASE, STACK_SIZE)
@@ -256,6 +341,7 @@ def main():
         check=True, capture_output=True, text=True).stdout.strip().split("/")[1])
     limit = args.seconds * timescale
     start, n = time.time(), 0
+    m.blocks.clear()
     for dts, size, pos in video:
         if dts >= limit:
             break
@@ -276,13 +362,19 @@ def main():
           f" ({time.time() - start:.1f} s emulated)")
     if args.count and frames:
         print(f"  {video_instructions / n / 1e6:.2f} M instructions per frame")
+    if m.profile and n:
+        m.profile.report("video decoding", m.blocks, n, "per frame", args.top)
     if args.png or args.count:
         # The second call shows the cost without the one-time table setup.
         for _ in range(2):
             before = m.instructions
+            m.blocks.clear()
             result, _ = m.call("video_rgb", RGB_ADDR, 320 * 2, 320, 180, DEC_RGB_BIG_ENDIAN)
         print(f"rgb: {result}" + (f", {m.instructions - before} instructions for 320x180"
                                   if args.count else ""))
+        if m.profile:
+            m.profile.report("RGB conversion to 320x180", m.blocks, 1, "per frame",
+                             args.top)
         if args.png:
             write_png(args.png, bytes(m.uc.mem_read(RGB_ADDR, 320 * 180 * 2)), 320, 180)
             print(f"wrote {args.png}")
@@ -296,6 +388,7 @@ def main():
     print(f"audio open: {result} (config {len(asc)} bytes)")
     audio = packets(args.mp4, "a:0")
     before, n = m.instructions, 0
+    m.blocks.clear()
     if args.sound:
         result, out = m.call("sound_open", 32768, 44100)
         if result != 0:
@@ -357,6 +450,9 @@ def main():
     if args.count and out[0]:
         seconds = out[0] / out[3]
         print(f"  {(m.instructions - before) / seconds / 1e6:.1f} M instructions per second of audio")
+        if m.profile:
+            m.profile.report("audio decoding", m.blocks, seconds, "per second",
+                             args.top)
     _, out = m.call("stats")
     print(f"stats: heap used {out[0]}, peak {out[1]}, free {out[2]}, stack used {out[3]}")
     m.call("close")

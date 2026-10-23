@@ -97,6 +97,7 @@ JSON_DUMP := $(HOST_DIR)/json_dump
 UNIT_TESTS := $(HOST_DIR)/unit_tests
 STREAM_TEST := $(HOST_DIR)/stream_test
 FEED_TEST := $(HOST_DIR)/feed_test
+RGB_TEST := $(HOST_DIR)/rgb_test
 
 .PHONY: all debug release bench tls dist test test-arm test-playback host arm clean
 .DELETE_ON_ERROR:
@@ -287,8 +288,9 @@ $(FEED_TEST): host/tests/feed_test.c src/palm/stream_feed.c src/palm/stream_feed
 # Offline tests. JSON samples in testdata/ (not committed) are compared
 # with Python's parser when present. Downloaded streams in testdata/media/
 # are read as they would arrive over the network, through small rings.
-test: $(JSON_DUMP) $(UNIT_TESTS) $(PVIEW) $(STREAM_TEST) $(FEED_TEST)
+test: $(JSON_DUMP) $(UNIT_TESTS) $(PVIEW) $(STREAM_TEST) $(FEED_TEST) $(RGB_TEST)
 	$(UNIT_TESTS)
+	$(RGB_TEST)
 	@for video in $(wildcard testdata/media/*.video.mp4); do \
 		id=$$(basename $$video .video.mp4); audio=testdata/media/$$id.audio.mp4; \
 		$(PVIEW) merge $$video $$audio $(HOST_DIR)/$$id.merged.mp4 > /dev/null 2>&1 || exit 1; \
@@ -313,6 +315,12 @@ test: $(JSON_DUMP) $(UNIT_TESTS) $(PVIEW) $(STREAM_TEST) $(FEED_TEST)
 
 
 BENCH_HOST := $(HOST_DIR)/bench
+
+$(RGB_TEST): host/tests/rgb_test.c src/arm/decoder.c src/arm/decoder.h \
+		$(FFMPEG_HOST)/libavcodec/libavcodec.a $(FFMPEG_HOST)/libavutil/libavutil.a | $(HOST_DIR)
+	$(HOST_CC) $(HOST_FLAGS) -Isrc/arm -I$(DEPS)/ffmpeg -I$(FFMPEG_HOST) \
+		host/tests/rgb_test.c $(FFMPEG_HOST)/libavcodec/libavcodec.a \
+		$(FFMPEG_HOST)/libavutil/libavutil.a -lm -o $@
 
 $(BENCH_HOST): host/bench.c src/core/mp4_read.c src/arm/decoder.c $(wildcard src/core/*.h) \
 		src/arm/decoder.h $(FFMPEG_HOST)/libavcodec/libavcodec.a | $(HOST_DIR)
