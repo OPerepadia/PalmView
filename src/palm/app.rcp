@@ -10,7 +10,10 @@ FORM ID MainForm AT (0 0 160 160)
 MENUID MainMenuBar
 BEGIN
     TITLE "PalmView"
-    FIELD ID SearchField AT (2 17 84 12) EDITABLE UNDERLINED SINGLELINE MAXCHARS 63
+    FIELD ID SearchField AT (2 17 71 12) EDITABLE UNDERLINED SINGLELINE MAXCHARS 63
+    POPUPTRIGGER "" ID HistoryTrigger AT (75 17 12 12) LEFTANCHOR
+    LIST "" ID HistoryList AT (2 30 156 AUTO) NONUSABLE VISIBLEITEMS 8
+    POPUPLIST ID HistoryTrigger HistoryList
     BUTTON "Search" ID SearchButton AT (89 16 35 12)
     BUTTON "Saved" ID SavedButton AT (127 16 31 12)
     LIST "" ID ResultList AT (0 32 160 110) VISIBLEITEMS 10
@@ -53,6 +56,7 @@ MENU ID MainMenuBar
 BEGIN
     PULLDOWN "Options"
     BEGIN
+        MENUITEM "Clear Search History" ID MenuClearHistory
         MENUITEM "Reset YouTube ID" ID MenuResetVisitor
         MENUITEM "About PalmView" ID MenuAbout
     END

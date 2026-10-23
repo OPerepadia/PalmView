@@ -24,11 +24,14 @@
 #define CLIENT_FILE STORE_DIR "/client.txt"
 #define CLIENT_FILE_CAPACITY 1024
 #define PREFS_ID 0
-#define PREFS_VERSION 2
+#define PREFS_VERSION 3
 #define MAX_SAVED 32
 #define SAVED_NAME_CAPACITY 64
 /* Redirects in a row a download follows. */
 #define MAX_REDIRECTS 5
+/* Recent searches kept, newest first; the search field holds 63 chars. */
+#define HISTORY_MAX 8
+#define HISTORY_CAPACITY 64
 /* palmOne's 5-way reports the centre button this way (PalmChars.h). */
 #define vchrNavChange 0x0503
 #define navBitSelect 0x0010
@@ -55,6 +58,7 @@ typedef enum Task {
 typedef struct AppPrefs {
     Char visitor[YT_VISITOR_CAPACITY];
     UInt16 volume;              /* level, below VOLUME_LEVELS */
+    Char history[HISTORY_MAX][HISTORY_CAPACITY];    /* "" when unused */
 } AppPrefs;
 
 typedef struct AppState {
@@ -116,6 +120,7 @@ typedef struct AppState {
     Boolean prefsChanged;       /* saved when the app stops */
     UInt32 lastCentre;          /* ticks of the last 5-way centre press */
     UInt16 playView;            /* tapping the status shows diagnostics */
+    Char *historyItems[HISTORY_MAX];    /* the history list's choices */
     Char playPath[STORE_PATH_CAPACITY];     /* empty to stream */
     Char playTitle[64];
     Char playStatus[128];
@@ -303,7 +308,7 @@ static Err EnsureNetwork(AppState *s)
 
 static void LoadSettings(AppState *s)
 {
-    UInt16 size = sizeof(s->prefs);
+    UInt16 size = sizeof(s->prefs), i;
     Char *textP;
     UInt16 length = 0;
     MemSet(&s->prefs, sizeof(s->prefs), 0);
@@ -313,6 +318,8 @@ static void LoadSettings(AppState *s)
         s->prefs.volume = VOLUME_DEFAULT;
     }
     s->prefs.visitor[sizeof(s->prefs.visitor) - 1] = '\0';
+    for (i = 0; i < HISTORY_MAX; i++)
+        s->prefs.history[i][HISTORY_CAPACITY - 1] = '\0';
     if (s->prefs.volume >= VOLUME_LEVELS) s->prefs.volume = VOLUME_DEFAULT;
     YtClientDefaults(&s->client);
     /* A client.txt on the card overrides the client when YouTube changes
@@ -463,11 +470,43 @@ static void InitMainForm(AppState *s)
         SearchField));
 }
 
+/* Puts queryP first in the search history, without repeats. */
+static void RememberSearch(AppState *s, const Char *queryP)
+{
+    UInt16 i, moved = HISTORY_MAX - 1;
+    for (i = 0; i < HISTORY_MAX; i++)
+        if (StrCaselessCompare(s->prefs.history[i], queryP) == 0) {
+            moved = i;
+            break;
+        }
+    MemMove(s->prefs.history[1], s->prefs.history[0],
+        (Int32)moved * HISTORY_CAPACITY);
+    StrNCopy(s->prefs.history[0], queryP, HISTORY_CAPACITY - 1);
+    s->prefs.history[0][HISTORY_CAPACITY - 1] = '\0';
+    s->prefsChanged = true;
+}
+
+/* Fills the history list. Returns how many searches it shows. */
+static UInt16 ShowHistory(AppState *s)
+{
+    ListType *listP = (ListType *)GetObject(HistoryList);
+    UInt16 count = 0;
+    while (count < HISTORY_MAX && s->prefs.history[count][0] != '\0') {
+        s->historyItems[count] = s->prefs.history[count];
+        count++;
+    }
+    LstSetListChoices(listP, s->historyItems, count);
+    LstSetHeight(listP, count);
+    LstSetSelection(listP, noListSelection);
+    return count;
+}
+
 static void StartSearch(AppState *s)
 {
     FieldType *fieldP = (FieldType *)GetObject(SearchField);
     const Char *queryP = FldGetTextPtr(fieldP);
     if (s->task != taskIdle || queryP == 0 || queryP[0] == '\0') return;
+    RememberSearch(s, queryP);
     YtSearchInit(s->searchP);
     ShowResults(s, true);
     JsonScanInit(&s->scanner, s->jsonValue, sizeof(s->jsonValue),
@@ -1366,6 +1405,8 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                     if (s->task == taskIdle) FrmPopupForm(SavedForm);
                     return true;
                 case SavedBackButton: ReturnFromSaved(s); return true;
+                /* With no history, nothing pops up. */
+                case HistoryTrigger: return ShowHistory(s) == 0;
                 case PlayButton:
                     if (s->saved) StrCopy(s->playPath, s->outPath);
                     else s->playPath[0] = '\0';
@@ -1374,6 +1415,20 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 case PlayPauseButton: TogglePause(s); return true;
                 case PlayDoneButton: ReturnFromPlay(s); return true;
                 default: break;
+            }
+            break;
+        case popSelectEvent:
+            /* Handled here so the trigger keeps its empty label. */
+            if (eventP->data.popSelect.controlID == HistoryTrigger) {
+                Int16 selection = eventP->data.popSelect.selection;
+                FieldType *fieldP = (FieldType *)GetObject(SearchField);
+                if (selection >= 0 && selection < HISTORY_MAX) {
+                    const Char *queryP = s->prefs.history[selection];
+                    FldSetSelection(fieldP, 0, FldGetTextLength(fieldP));
+                    FldInsert(fieldP, queryP, StrLen(queryP));
+                    StartSearch(s);
+                }
+                return true;
             }
             break;
         case penDownEvent:
@@ -1466,6 +1521,12 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
         case menuEvent:
             if (eventP->data.menu.itemID == MenuAbout) {
                 FrmAlert(AboutAlert);
+                return true;
+            }
+            if (eventP->data.menu.itemID == MenuClearHistory) {
+                MemSet(s->prefs.history, sizeof(s->prefs.history), 0);
+                s->prefsChanged = true;
+                SetStatus(s, "Search history cleared.");
                 return true;
             }
             if (eventP->data.menu.itemID == MenuResetVisitor) {

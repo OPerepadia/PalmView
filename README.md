@@ -34,7 +34,9 @@ You need Palm OS 5, Wi-Fi and an SD card. On the TX:
 
 ## Use
 
-1. Type a search and tap **Search** (or write a return stroke).
+1. Type a search and tap **Search** (or write a return stroke). The ▼ next
+   to the search field lists your last 8 searches; pick one to search again.
+   **Options > Clear Search History** forgets them.
 2. Tap a result. PalmView fetches the stream info.
 3. Tap **Play** to stream it, or **Download** to save it. Download progress
    shows the speed and TLS handshake time.

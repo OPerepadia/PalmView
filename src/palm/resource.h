@@ -7,6 +7,8 @@
 #define ResultList 1003
 #define StatusField 1004
 #define SavedButton 1005
+#define HistoryTrigger 1006
+#define HistoryList 1007
 
 #define DetailForm 1100
 #define InfoField 1101
@@ -21,6 +23,7 @@
 #define MainMenuBar 1200
 #define MenuAbout 1201
 #define MenuResetVisitor 1202
+#define MenuClearHistory 1203
 
 #define SavedForm 1400
 #define SavedList 1401
