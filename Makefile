@@ -39,7 +39,7 @@ CORE_SOURCES := $(wildcard src/core/*.c)
 # functions it calls in other files. Data references stay within a file.
 LINK_ORDER := palm/startup palm/arm_module core/mp4_read palm/playback \
 	core/mp4_merge core/mp4_frag palm/store palm/main core/text core/json_scan core/yt_api \
-	palm/net_job core/mp4_stream palm/stream_feed
+	palm/net_job core/mp4_stream palm/stream_feed palm/udp_log
 OBJECTS := $(patsubst %,$(BUILD_DIR)/%.o,$(LINK_ORDER)) $(BUILD_DIR)/http.o
 FAR_DIR := $(BUILD_DIR)/far
 FAR_OBJECTS := $(patsubst $(BUILD_DIR)/%,$(FAR_DIR)/app/%,$(OBJECTS))

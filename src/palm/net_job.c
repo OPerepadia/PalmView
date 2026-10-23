@@ -9,6 +9,13 @@
 /* A polling job still tries TLS this often when the socket looks idle:
  * TLS may hold received data the socket no longer shows. */
 #define POLL_RETRY_DIVISOR 4
+/* Steps that take longer than this are logged. */
+#define SLOW_STEP_MS 100
+
+/* Log lines for the phase just finished, by NetJobPhase */
+static const Char kPhaseLines[5][16] = {
+    "dns % ms", "connect % ms", "tls % ms", "send % ms", "receive % ms"
+};
 
 enum {
     jobStateDns = 0,
@@ -45,6 +52,7 @@ struct NetJob {
     Boolean bufferFilled;       /* TLS may have more right away */
     Char *locationP;
     UInt16 locationCapacity;
+    const Char *tagP;
     UInt8 buffer[NET_JOB_IO_CAPACITY];
 };
 
@@ -53,8 +61,17 @@ static Boolean TimedOut(UInt32 startTicks, Int32 timeoutTicks)
     return TimGetTicks() - startTicks >= (UInt32)timeoutTicks;
 }
 
+static UInt32 TicksToMs(UInt32 ticks)
+{
+    return ticks * 1000UL / SysTicksPerSecond();
+}
+
 static void SetPhase(NetJob *jobP, UInt16 phase)
 {
+    if (jobP->state != jobStateDns)
+        UdpLogLine(jobP->config.logP, jobP->tagP,
+            kPhaseLines[jobP->resultP->phase],
+            TicksToMs(TimGetTicks() - jobP->phaseStart), 0, 0);
     jobP->resultP->phase = phase;
     jobP->phaseStart = TimGetTicks();
 }
@@ -118,8 +135,15 @@ static void CloseTls(NetJob *jobP, Boolean cancel)
 static UInt16 Finish(NetJob **jobPP)
 {
     NetJob *jobP = *jobPP;
+    NetJobResult *r = jobP->resultP;
     Err error = errNone;
-    Boolean cancel = jobP->resultP->status != netJobOk;
+    Boolean cancel = r->status != netJobOk;
+    UdpLogLine(jobP->config.logP, jobP->tagP, "end % http % got %", r->status,
+        r->httpStatus, r->received);
+    if (r->status != netJobOk && r->status != netJobCancelled)
+        UdpLogLine(jobP->config.logP, jobP->tagP, "fail net $ tls %/-%",
+            r->netError, r->tlsStatus,
+            r->tlsError < 0 ? (UInt32)-r->tlsError : (UInt32)r->tlsError);
     if (jobP->tlsOpen) CloseTls(jobP, cancel);
     else if (jobP->sessionId != 0) CloseTls(jobP, true);
     if (jobP->socket >= 0)
@@ -172,6 +196,7 @@ Boolean NetJobStart(NetJob **jobPP, const NetJobConfig *configP,
     jobP->bodyProcP = bodyProcP;
     jobP->bodyContextP = bodyContextP;
     jobP->socket = -1;
+    jobP->tagP = "net";
     jobP->state = jobStateDns;
     SetPhase(jobP, netPhaseDns);
     *jobPP = jobP;
@@ -186,6 +211,11 @@ void NetJobCancel(NetJob *jobP)
 Boolean NetJobReceiving(const NetJob *jobP)
 {
     return jobP != 0 && jobP->state == jobStateRead;
+}
+
+void NetJobSetTag(NetJob *jobP, const Char *tagP)
+{
+    jobP->tagP = tagP;
 }
 
 void NetJobKeepLocation(NetJob *jobP, Char *bufferP, UInt16 capacity)
@@ -312,11 +342,10 @@ static UInt16 StepRead(NetJob **jobPP)
     return netJobRunning;
 }
 
-UInt16 NetJobStep(NetJob **jobPP)
+static UInt16 Step(NetJob **jobPP)
 {
     NetJob *jobP;
     Err error = errNone;
-    if (jobPP == 0 || *jobPP == 0) return netJobFinished;
     jobP = *jobPP;
     EvtResetAutoOffTimer();
     if (jobP->cancelled) {
@@ -518,4 +547,23 @@ UInt16 NetJobStep(NetJob **jobPP)
             jobP->resultP->platformError = sysErrParamErr;
             return Finish(jobPP);
     }
+}
+
+UInt16 NetJobStep(NetJob **jobPP)
+{
+    UdpLog *logP;
+    const Char *tagP;
+    UInt16 state;
+    UInt32 start, ms;
+    UInt16 progress;
+    if (jobPP == 0 || *jobPP == 0) return netJobFinished;
+    logP = (*jobPP)->config.logP;
+    tagP = (*jobPP)->tagP;
+    state = (*jobPP)->state;
+    start = TimGetTicks();
+    progress = Step(jobPP);
+    ms = TicksToMs(TimGetTicks() - start);
+    if (ms >= SLOW_STEP_MS)
+        UdpLogLine(logP, tagP, "slow % ms in state %", ms, state, 0);
+    return progress;
 }

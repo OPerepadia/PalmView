@@ -137,6 +137,31 @@ wait.
   16 KB record takes about 100 ms to decrypt, and video drops to half rate.
   `tools/fetch-deps.sh` still pins 0.1.2.
 
+### Network log
+
+For debugging, PalmView can send a log of network events over UDP to a
+computer on the same network. Add a line to `client.txt` on the card with
+the computer's address and a port:
+
+```
+log=192.168.2.10:5140
+```
+
+Then listen on that computer, for example with `nc -klu 5140`. Each
+connection's phases and their times, how it ended, slow steps (over
+100 ms), retries, and a playback summary each second arrive as text lines:
+
+```
+41.230 v get 1048576-5242879 of 2600000
+41.410 v dns 20 ms
+41.520 v connect 110 ms
+42.880 v tls 1360 ms
+45.100 play at 30120 ms, buffer 17800 + 18000 ms
+```
+
+Lines go out at most once a second, as one datagram. Without a `log=` line
+nothing is sent.
+
 On a Palm TX, a 25 fps 144p video takes about 25 ms per frame to decode at
 full quality and 19 ms without deblocking (measured with PalmView Bench).
 
@@ -246,7 +271,7 @@ against ffmpeg's.
 - `src/palm/`: the app. `main.c` (UI and flow), `net_job.c` (cooperative
   HTTPS, based on PalmTLS's TLS Tester), `stream_feed.c` (streaming
   downloads), `store.c` (memory card), `arm_module.c` (native code loader),
-  `playback.c` (the player).
+  `playback.c` (the player), `udp_log.c` (the network log).
 - `src/arm/`: the native ARM module. `decoder.c` (FFmpeg wrapper),
   `sound.c` (the PCM ring and stream callback), `dispatch.c` and `entry.S`
   (the 68K-to-ARM call), `libc.c` (heap and the C library bits FFmpeg

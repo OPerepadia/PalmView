@@ -5,6 +5,7 @@
 
 #include <PalmOS.h>
 #include "http.h"
+#include "udp_log.h"
 
 /* One HTTPS request/response, advanced a step at a time from the event
  * loop so the UI stays responsive. Based on PalmTLS's TLS Tester client, but
@@ -47,6 +48,7 @@ typedef struct NetJobConfig {
      * stays non-blocking and is checked first. For jobs that run during
      * playback. */
     Boolean poll;
+    UdpLog *logP;               /* 0 for no log */
 } NetJobConfig;
 
 typedef struct NetJobResult {
@@ -77,6 +79,8 @@ UInt16 NetJobStep(NetJob **jobPP);
 /* True once the response is being read: each step may then pass up to
  * NET_JOB_IO_CAPACITY body bytes on. */
 Boolean NetJobReceiving(const NetJob *jobP);
+/* Names the job in the log; tagP must stay valid. */
+void NetJobSetTag(NetJob *jobP, const Char *tagP);
 /* Where a redirect's Location goes, in full. Left empty if it does not
  * fit. */
 void NetJobKeepLocation(NetJob *jobP, Char *bufferP, UInt16 capacity);

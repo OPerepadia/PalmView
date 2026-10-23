@@ -14,6 +14,7 @@
 #include "store.h"
 #include "stream_feed.h"
 #include "text.h"
+#include "udp_log.h"
 #include "yt_api.h"
 
 #define CHUNK_BYTES (4UL * 1024UL * 1024UL)
@@ -121,6 +122,8 @@ typedef struct AppState {
     UInt32 lastCentre;          /* ticks of the last 5-way centre press */
     UInt16 playView;            /* tapping the status shows diagnostics */
     Char *historyItems[HISTORY_MAX];    /* the history list's choices */
+    Char logDest[24];           /* "a.b.c.d:port" from client.txt, or "" */
+    UdpLog *logP;               /* 0 without a log= line */
     Char playPath[STORE_PATH_CAPACITY];     /* empty to stream */
     Char playTitle[64];
     Char playStatus[128];
@@ -303,7 +306,26 @@ static Err EnsureNetwork(AppState *s)
     if (error != errNone) return error;
     s->netOpen = true;
     s->netConfig.netRefNum = s->netRefNum;
+    if (s->logDest[0] != '\0')
+        s->logP = s->netConfig.logP = UdpLogOpen(s->netRefNum, s->logDest);
     return errNone;
+}
+
+/* The "log=" line of client.txt, which YtClientParse skips. */
+static void ReadLogDest(AppState *s, const Char *textP, UInt16 length)
+{
+    UInt16 i = 0, n = 0;
+    while (i + 4 < length) {
+        if (StrNCompare(textP + i, "log=", 4) == 0) {
+            for (i += 4; i < length && n < sizeof(s->logDest) - 1 &&
+                 textP[i] != '\r' && textP[i] != '\n'; i++)
+                s->logDest[n++] = textP[i];
+            s->logDest[n] = '\0';
+            return;
+        }
+        while (i < length && textP[i] != '\n') i++;
+        i++;
+    }
 }
 
 static void LoadSettings(AppState *s)
@@ -328,8 +350,10 @@ static void LoadSettings(AppState *s)
     textP = (Char *)MemPtrNew(CLIENT_FILE_CAPACITY);
     if (textP == 0) return;
     if (StoreReadText(s->volume, CLIENT_FILE, textP, CLIENT_FILE_CAPACITY,
-            &length) == errNone)
+            &length) == errNone) {
         YtClientParse(&s->client, textP, length);
+        ReadLogDest(s, textP, length);
+    }
     MemPtrFree(textP);
 }
 
@@ -1273,6 +1297,17 @@ static void StepPlayback(AppState *s)
         UpdatePlayStatus(s);
     } else if (p->playing && now - s->playStatusTicks >= SysTicksPerSecond()) {
         s->playStatusTicks = now;
+        if (s->feedP != 0) {
+            const Char *tagP = p->buffering || !p->started ? "wait" : "play";
+            UdpLogLine(s->logP, tagP, "at % ms, buffer % + % ms",
+                PlaybackPositionMs(p), PlaybackBufferedMs(p, STREAM_FEED_VIDEO),
+                PlaybackBufferedMs(p, STREAM_FEED_AUDIO));
+            UdpLogLine(s->logP, tagP, "net % KB/s, cpu %, fps x10 %",
+                p->netKBps, p->cpuPercent, p->fps10);
+            UdpLogLine(s->logP, tagP, "level %, late %, peak net % ms",
+                p->level, p->lateTotal,
+                p->peakNet * 1000UL / SysTicksPerSecond());
+        }
         EvtResetAutoOffTimer();
         UpdatePlayStatus(s);
     }
@@ -1594,6 +1629,7 @@ static void StopApplication(AppState *s)
         MemHandleUnlock(s->trustH);
         DmReleaseResource(s->trustH);
     }
+    UdpLogClose(s->logP);
     if (s->netOpen) NetLibClose(s->netRefNum, false);
     CloseTlsLibrary(s);
     if (s->searchTextH != 0) MemHandleFree(s->searchTextH);
@@ -1632,6 +1668,7 @@ UInt32 PilotMain(UInt16 cmd, void *cmdPBP, UInt16 launchFlags)
                 !HandleEvent(&event, s))
                 FrmDispatchEvent(&event);
             if (event.eType != appStopEvent) StepPlayback(s);
+            UdpLogFlush(s->logP);
         } while (event.eType != appStopEvent);
     }
     StopApplication(s);
