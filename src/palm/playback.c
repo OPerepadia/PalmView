@@ -35,15 +35,18 @@
 #define CATCH_UP_SAMPLES_PER_STEP 64
 /* The clock follows the sound gently, and jumps when far off. */
 #define CLOCK_SNAP_MS 300
-/* Quality drops a level when over a tenth of a second's frames are late
- * and decoding kept the CPU BUSY_CPU_PERCENT busy. Late frames with time
- * to spare come from stalls that lower quality would not fix. Quality goes
- * up a level after CALM_WINDOWS calm seconds in a row: below
- * CALM_CPU_PERCENT, and at most a tenth late. If it drops again within
- * LEVEL_HOLD_SECONDS, twice as many are needed. */
+/* A second is late when over a tenth of its frames, and at least
+ * MIN_LATE_FRAMES, are late. Quality drops a level after a late second
+ * with decoding keeping the CPU BUSY_CPU_PERCENT busy; late frames with
+ * time to spare come from stalls that lower quality would not fix. Half
+ * rate looks much worse than an odd late second, so dropping to it takes
+ * two such seconds in a row. Quality goes up a level after CALM_WINDOWS
+ * calm seconds in a row: below CALM_CPU_PERCENT, and not late. If it drops
+ * again within LEVEL_HOLD_SECONDS, twice as many are needed. */
+#define MIN_LATE_FRAMES 3
 #define BUSY_CPU_PERCENT 80
 #define CALM_WINDOWS 3
-#define MAX_CALM_WINDOWS 48
+#define MAX_CALM_WINDOWS 12
 #define CALM_CPU_PERCENT 70
 #define LEVEL_HOLD_SECONDS 10
 /* PlaybackStep keeps working this long unless an event is waiting: each
@@ -322,6 +325,7 @@ static const Char *StartDecoders(Playback *p)
     p->skippedInRow = 0;
     p->calmWindows = 0;
     p->calmNeeded = CALM_WINDOWS;
+    p->strained = false;
     p->lastLevelDown = 0;
     p->settling = false;
     p->soundInputEnded = false;
@@ -621,7 +625,7 @@ static void EndWindow(Playback *p)
 {
     UInt32 now = TimGetTicks(), elapsed = now - p->windowStart;
     UInt32 perSecond = SysTicksPerSecond();
-    Boolean late;
+    Boolean late, busy;
     if (elapsed < perSecond) return;
     p->fps10 = (UInt16)((UInt32)p->windowShown * 10UL * perSecond / elapsed);
     p->cpuPercent = (UInt16)(p->windowBusy >= elapsed ? 100
@@ -639,11 +643,13 @@ static void EndWindow(Playback *p)
     p->diffMin = p->windowDiffMin;
     p->diffMax = p->windowDiffMax;
     p->lateTotal += p->windowLate;
-    late = (UInt32)p->windowLate * 10UL > p->windowFrames;
+    late = p->windowLate >= MIN_LATE_FRAMES &&
+        (UInt32)p->windowLate * 10UL > p->windowFrames;
+    busy = late && p->cpuPercent >= BUSY_CPU_PERCENT;
     if (p->settling) {
         p->settling = false;
-    } else if (late && p->cpuPercent >= BUSY_CPU_PERCENT &&
-               p->level + 1 < PLAYBACK_LEVELS) {
+    } else if (busy && p->level + 1 < PLAYBACK_LEVELS &&
+               (p->level + 2 < PLAYBACK_LEVELS || p->strained)) {
         if (p->lastLevelDown != 0 &&
             now - p->lastLevelDown < LEVEL_HOLD_SECONDS * perSecond &&
             p->calmNeeded < MAX_CALM_WINDOWS)
@@ -661,6 +667,7 @@ static void EndWindow(Playback *p)
     } else {
         p->calmWindows = 0;
     }
+    p->strained = busy;
     p->windowStart = now;
     p->windowBusy = 0;
     p->windowFrames = 0;

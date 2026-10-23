@@ -107,6 +107,7 @@ typedef struct Playback {
     UInt32 lastLevelDown;   /* ticks, 0 if never */
     UInt16 levelChanges;
     Boolean settling;       /* just resumed: this window keeps the level */
+    Boolean strained;       /* the last window was late with the CPU busy */
 
     /* Statistics; the window restarts every second */
     UInt32 windowStart;

@@ -101,13 +101,16 @@ decoders. `src/palm/playback.c` drives it:
   it has played are the clock the pictures follow. A small assembly entry
   (`SoundCallbackEntry` in `src/arm/entry.S`) loads the module's GOT, since
   the OS calls in with its own `r9`.
-- Frames more than 120 ms late are not drawn. If more than 10% of a
-  second's frames are late while decoding keeps the CPU at least 80% busy,
-  quality drops a level: first no deblocking in B-frames ("fast B"), then
-  no deblocking ("fast"), then no B-frames (half the frame rate). Late
-  frames with CPU to spare come from stalls, which lower quality would not
-  fix. Quality comes back after three calm seconds: under 70% CPU and at
-  most 10% late. More than 1.5 s behind, video skips to the next keyframe.
+- Frames more than 120 ms late are not drawn. A second is late when more
+  than 10% of its frames, and at least 3, are late. After a late second
+  with decoding keeping the CPU at least 80% busy, quality drops a level:
+  first no deblocking in B-frames ("fast B"), then no deblocking ("fast").
+  Dropping further, to no B-frames (half the frame rate), takes two such
+  seconds in a row, since half rate looks much worse than an odd late
+  second. Late frames with time to spare come from stalls that lower
+  quality would not fix. Quality comes back after three calm seconds: under
+  70% CPU and not late. If it drops again soon, it waits twice as long, up
+  to 12 seconds. More than 1.5 s behind, video skips to the next keyframe.
 
 The status line shows the frame rate, CPU use, skipped frames, quality, and
 sound gaps (the ring ran dry). Tap it for details on the sound and the
