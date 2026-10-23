@@ -8,9 +8,11 @@
  *
  *   playback_sim FILE.mp4 [LOAD] [PAUSE_AT_SECONDS]
  *   playback_sim --stream VIDEO.mp4 AUDIO.mp4 KB_PER_S [OUTAGE_AT SECONDS]
+ *       [--seek AT TO]...
  *
  * The second form streams YouTube's two DASH files over a simulated
- * network of the given speed, which can drop out for a while.
+ * network of the given speed, which can drop out for a while. --seek moves
+ * to TO seconds of the video once AT seconds have passed.
  *
  * Checks that every decoded frame is shown or skipped, that all sound is
  * played, that pausing holds the position, and that playback ends. Shows
@@ -204,8 +206,14 @@ static StreamFeed gFeed;
 UInt32 StreamFeedLength(const StreamFeed *f, UInt16 track) { return f->lengths[track]; }
 const Char *StreamFeedError(const StreamFeed *f) { (void)f; return 0; }
 UInt32 StreamFeedReceived(const StreamFeed *f) { return f->received; }
-UInt16 StreamFeedRetries(const StreamFeed *f) { (void)f; return 0; }
 void StreamFeedStop(StreamFeed *f) { (void)f; }
+
+void StreamFeedSeek(StreamFeed *f, UInt32 videoOffset, UInt32 audioOffset)
+{
+    f->offsets[0] = videoOffset;
+    f->offsets[1] = audioOffset;
+    f->backlog[0] = f->backlog[1] = 0;
+}
 
 void StreamFeedStart(StreamFeed *f, Mp4Stream *videoP, Mp4Stream *audioP)
 {
@@ -291,7 +299,8 @@ static void MeasureSync(void)
     if (!gPlayback.soundStarted || DecVideoQueued(&pts) == 0) return;
     frameMs = (pts - gPlayback.firstPts) * 1000.0 / gPlayback.timescale;
     period = gSound.bufferFrames * 1000.0 / gSound.sampleRate;
-    heardMs = (r->played > r->lastRequest ? r->played - r->lastRequest : 0) *
+    heardMs = gPlayback.seekMs +
+        (r->played > r->lastRequest ? r->played - r->lastRequest : 0) *
         1000.0 / gSound.sampleRate + fmin(gNowMs - gSound.lastCallbackMs, period);
     error = frameMs - heardMs;
     gSync.frames++;
@@ -403,24 +412,34 @@ static const Char *OpenFeed(char **argv, int argc)
     return PlaybackOpenStream(&gPlayback, &gFeed);
 }
 
+#define MAX_SEEKS 4
+
 int main(int argc, char **argv)
 {
     Playback *p = &gPlayback;
+    double seekAt[MAX_SEEKS], seekTo[MAX_SEEKS];
+    int seeks = 0, seeksDone = 0;
     RectangleType bounds = { { 0, 0 }, { 160, 90 } };
     Boolean streaming = argc > 1 && strcmp(argv[1], "--stream") == 0;
     int pauseArg = streaming ? 7 : 3;
     double pauseAtMs = argc > pauseArg ? atof(argv[pauseArg]) * 1000.0 : -1;
-    double pausedFor = 0, nextReport = 1000, waitedMs = 0;
+    double pausedFor = 0, nextReport = 1000, waitedMs = 0, seekWaitMs = 0;
     const Char *errorP;
     DecVideoInfo video;
     DecAudioInfo audio;
     UInt32 position, played = 0;
     UInt16 level = 0;
     int failed = 0;
+    while (argc > 3 && strcmp(argv[argc - 3], "--seek") == 0 && seeks < MAX_SEEKS) {
+        seekAt[seeks] = atof(argv[argc - 2]) * 1000.0;
+        seekTo[seeks] = atof(argv[argc - 1]) * 1000.0;
+        seeks++;
+        argc -= 3;
+    }
     if (argc < 2 || (streaming && argc < 5)) {
         fprintf(stderr, "usage: playback_sim FILE.mp4 [LOAD] [PAUSE_AT_SECONDS]\n"
             "       playback_sim --stream VIDEO.mp4 AUDIO.mp4 KB_PER_S "
-            "[OUTAGE_AT SECONDS [PAUSE_AT_SECONDS]]\n");
+            "[OUTAGE_AT SECONDS [PAUSE_AT_SECONDS]] [--seek AT TO]...\n");
         return 2;
     }
     if (!streaming && argc > 2) gLoad = atof(argv[2]);
@@ -446,7 +465,13 @@ int main(int argc, char **argv)
         Advance(COST_EVENT_LOOP);
         if (wait == evtWaitForever) break;
         Advance(wait * 1000.0 / TICKS_PER_SECOND);
-        if (streaming && (p->buffering || !p->started)) waitedMs += gNowMs - before;
+        if (streaming && (p->buffering || !p->started)) {
+            waitedMs += gNowMs - before;
+            seekWaitMs += gNowMs - before;
+        } else if (seekWaitMs != 0) {
+            printf("  playing again after %.1f s\n", seekWaitMs / 1000);
+            seekWaitMs = 0;
+        }
         if (pauseAtMs >= 0 && gNowMs >= pauseAtMs) {
             pauseAtMs = -1;
             PlaybackPause(p);
@@ -461,6 +486,29 @@ int main(int argc, char **argv)
             printf("paused 3 s at ");
             PrintClock(position);
             printf("\n");
+        }
+        /* In command-line order: they were read from the end. */
+        if (seeksDone < seeks && gNowMs >= seekAt[seeks - 1 - seeksDone]) {
+            UInt32 from = PlaybackPositionMs(p), to;
+            if (!PlaybackCanSeek(p)) {
+                printf("FAIL: cannot seek at ");
+                PrintClock(from);
+                printf("\n");
+                failed = 1;
+            }
+            to = PlaybackSeek(p, (UInt32)seekTo[seeks - 1 - seeksDone]);
+            seeksDone++;
+            seekWaitMs = 0.001;
+            printf("seek from ");
+            PrintClock(from);
+            printf(" to ");
+            PrintClock(to);
+            printf("\n");
+            if (to > seekTo[seeks - seeksDone] ||
+                PlaybackPositionMs(p) != to) {
+                printf("FAIL: seek landed after the time asked for\n");
+                failed = 1;
+            }
         }
         if (p->level != level) {
             printf("level %u -> %u at ", level, p->level);
@@ -501,7 +549,8 @@ int main(int argc, char **argv)
     printf("clock drift vs. duration: %+.1f s\n",
         (gNowMs - pausedFor - waitedMs) / 1000 - PlaybackDurationMs(p) / 1000.0);
     if (!p->ended || p->decodeErrors != 0 || p->audioErrors != 0 ||
-        (p->catchUps == 0 && p->shown + p->skipped != video.frames)) {
+        (p->catchUps == 0 && p->seeks == 0 &&
+         p->shown + p->skipped != video.frames)) {
         printf("FAIL: frames not accounted for\n");
         failed = 1;
     }

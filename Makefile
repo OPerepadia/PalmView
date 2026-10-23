@@ -347,7 +347,8 @@ $(PLAYBACK_SIM): host/tests/playback_sim.c src/palm/playback.c src/palm/playback
 		$(FFMPEG_HOST)/libavutil/libavutil.a -lm -o $@
 
 # Plays each downloaded test video against a simulated Palm TX clock, then
-# streams each pair of DASH files at 40 KB/s with a 15 s outage at 20 s.
+# streams each pair of DASH files at 40 KB/s with a 15 s outage at 20 s,
+# and again seeking forward, back, and near the end.
 test-playback: $(PLAYBACK_SIM)
 	@for file in testdata/media/*.mp4; do \
 		case "$$file" in *.video.mp4|*.audio.mp4) continue;; esac; \
@@ -361,6 +362,10 @@ test-playback: $(PLAYBACK_SIM)
 		out=$$($(PLAYBACK_SIM) --stream $$video $$audio 40 20 15) || \
 			{ echo "$$out"; exit 1; }; \
 		echo "$$out" | tail -4; \
+		echo "== seeking in $$video"; \
+		out=$$($(PLAYBACK_SIM) --stream $$video $$audio 40 \
+			--seek 10 120 --seek 30 5 --seek 50 3600) || { echo "$$out"; exit 1; }; \
+		echo "$$out" | grep -E "^seek|again|sound:"; \
 	done
 
 # Runs the packaged ARM module in a PXA270 emulator and checks it decodes

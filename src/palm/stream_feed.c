@@ -57,7 +57,6 @@ struct StreamFeed {
     UInt32 allowance;       /* bytes a paced read may take now */
     UInt32 paceTicks;       /* when the allowance last grew */
     UInt32 received;
-    UInt16 retries;
     const Char *errorP;
     Boolean failed;
     Boolean dropped;
@@ -130,6 +129,22 @@ void StreamFeedStop(StreamFeed *f)
     f->activeP = 0;
 }
 
+void StreamFeedSeek(StreamFeed *f, UInt32 videoOffset, UInt32 audioOffset)
+{
+    UInt16 i;
+    if (f->activeP != 0 && f->activeP->jobP != 0) Close(f->activeP);
+    f->activeP = 0;
+    f->errorP = 0;
+    for (i = 0; i < 2; i++) {
+        FeedTrack *t = &f->tracks[i];
+        t->offset = i == STREAM_FEED_VIDEO ? videoOffset : audioOffset;
+        t->waiting = false;
+        t->failures = 0;
+        t->redirects = 0;
+        UdpLogLine(f->config.logP, t->tagP, "seek to %", t->offset, 0, 0);
+    }
+}
+
 const Char *StreamFeedError(const StreamFeed *f)
 {
     return f->errorP;
@@ -138,11 +153,6 @@ const Char *StreamFeedError(const StreamFeed *f)
 UInt32 StreamFeedReceived(const StreamFeed *f)
 {
     return f->received;
-}
-
-UInt16 StreamFeedRetries(const StreamFeed *f)
-{
-    return f->retries;
 }
 
 const NetJobResult *StreamFeedFailure(const StreamFeed *f)
@@ -234,7 +244,6 @@ static void Finished(StreamFeed *f, FeedTrack *t)
         f->errorP = "Lost the connection to YouTube.";
         return;
     }
-    f->retries++;
     t->waiting = true;
     t->retryTicks = TimGetTicks() + (UInt32)t->failures * RETRY_SECONDS *
         SysTicksPerSecond();

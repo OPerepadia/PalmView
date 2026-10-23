@@ -21,7 +21,8 @@
  *
  * It can also play YouTube's two streams while they download (a
  * StreamFeed). The compressed data waits in RAM rings, and the clock stops
- * to buffer whenever either stream runs dry. */
+ * to buffer whenever either stream runs dry. Streams can seek, to the
+ * start of a segment. */
 
 #define PLAYBACK_LEVELS 4
 
@@ -70,7 +71,11 @@ typedef struct Playback {
     Int32 clockOffsetMs;
     UInt32 pausedMs;
     UInt32 firstPts;
+    Boolean firstPtsKnown;
     UInt32 timescale;
+    UInt32 seekMs;          /* where the decoders started, 0 or a seek */
+    UInt32 audioFrom;       /* about where the sound at seekMs starts */
+    UInt32 seeks;
 
     /* Sound */
     Boolean ringOpen;           /* the decoder and PCM ring exist */
@@ -105,7 +110,6 @@ typedef struct Playback {
     UInt16 calmWindows;
     UInt16 calmNeeded;      /* grows when a level does not hold */
     UInt32 lastLevelDown;   /* ticks, 0 if never */
-    UInt16 levelChanges;
     Boolean settling;       /* just resumed: this window keeps the level */
     Boolean strained;       /* the last window was late with the CPU busy */
 
@@ -122,30 +126,15 @@ typedef struct Playback {
     UInt16 fps10;           /* frames shown per second, times 10 */
     UInt16 cpuPercent;
 
-    /* Diagnostics for the details view, per second */
-    UInt16 windowLoops;     /* PlaybackStep calls: event loop turns */
-    UInt16 windowSteps;     /* units of work */
-    Int32 windowDiffMin;    /* sound clock corrections, ms */
-    Int32 windowDiffMax;
-    UInt16 loopsPerSecond;
-    UInt16 stepsPerSecond;
-    Int32 diffMin;
-    Int32 diffMax;
-    UInt32 snaps;
+    /* For the status line and the network log, per second */
     UInt32 lateTotal;
     UInt32 windowNet;       /* ticks spent on the network */
     UInt32 windowReceived;  /* bytes received when the window began */
     UInt16 netPercent;
     UInt16 netKBps;
 
-    /* The longest stalls since playback started, in ticks: a network
-     * turn, a decode, and time away from PlaybackStep beyond the wait it
-     * asked for */
+    /* The longest network turn since playback started, in ticks */
     UInt32 peakNet;
-    UInt32 peakDecode;
-    UInt32 peakAway;
-    UInt32 stepEnd;
-    Int32 stepWait;
 } Playback;
 
 /* Opens pathP on the card and starts the decoder. Returns 0, or a message
@@ -171,6 +160,13 @@ void PlaybackSetVolume(Playback *p, UInt16 gain);
  * it needs to run again, as an EvtGetEvent timeout. */
 Int32 PlaybackStep(Playback *p);
 
+/* True once a stream has played and both segment indexes are in. */
+Boolean PlaybackCanSeek(const Playback *p);
+/* Moves a stream near ms and returns where it lands: the start of the
+ * segment holding ms. Keeps playing, or paused. */
+UInt32 PlaybackSeek(Playback *p, UInt32 ms);
+/* Seeks about ms from the position, backward or forward. */
+UInt32 PlaybackSkip(Playback *p, Boolean forward, UInt32 ms);
 UInt32 PlaybackPositionMs(const Playback *p);
 UInt32 PlaybackDurationMs(const Playback *p);
 /* Playback time in a stream's ring; 0xFFFFFFFF once all of it is in. */

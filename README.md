@@ -46,6 +46,12 @@ You need Palm OS 5, Wi-Fi and an SD card. On the TX:
 **Saved** on the main screen lists the videos on the card; tap one to play
 it. In the player, tap the picture, **Pause** or the 5-way centre to pause.
 
+While streaming, the bar under the video shows the position in red and
+what has downloaded in dark gray. Tap or drag on it to jump there, or
+press left and right on the 5-way to jump about 10 seconds. Playback goes
+on from the start of the piece of video (about 5 seconds) that holds that
+time, after a few seconds of loading.
+
 Press up and down on the 5-way navigator to change the volume. PalmView
 remembers it.
 
@@ -112,12 +118,9 @@ decoders. `src/palm/playback.c` drives it:
   70% CPU and not late. If it drops again soon, it waits twice as long, up
   to 12 seconds. More than 1.5 s behind, video skips to the next keyframe.
 
-The status line shows the frame rate, CPU use, skipped frames, quality, and
-sound gaps (the ring ran dry). Tap it for details on the sound and the
-clock. While streaming, tap again for the network, the buffers, and the
-longest stalls since playback started: a network turn, a decode, and time
-spent outside the player (the OS, other events) beyond what it asked to
-wait.
+The status line shows the frame rate, CPU use, skipped frames, quality,
+sound gaps (the ring ran dry), and while streaming the download speed. The
+network log below has more.
 
 ### Streaming
 
@@ -143,6 +146,13 @@ wait.
   has arrived. Only the current moof is kept besides the ring.
 - Playback starts with 3 seconds of both streams in. When either runs dry,
   the clock stops ("Buffering") until both have 5 seconds again.
+- Seeking uses the segment index (`sidx`) at the start of each DASH file.
+  Video goes back to the start of the segment holding the time asked for,
+  which begins with a keyframe, and sound to the segment holding that
+  point. Sound before it is downloaded and dropped: YouTube's sound
+  segments are 10 s long. The request in flight, if any, is dropped with
+  its connection; idle connections are reused. The decoders then start
+  again as they do at the start.
 - Network calls never wait during playback. The sockets stay non-blocking,
   so TLS does not wait for the rest of a 16 KB record, and a socket is only
   read when it has data. The network gets a turn at least every 20 ms.
@@ -234,21 +244,23 @@ It checks that every frame is shown or skipped, that all the sound plays,
 that pausing holds the position, and that playback ends. It also reports how
 far each picture was from the sound heard at that moment. It then streams
 each pair of downloaded DASH files over a simulated 40 KB/s network that
-drops out for 15 seconds.
+drops out for 15 seconds, and again seeking forward, back and past the end,
+showing how long each seek takes to play again.
 `build/host/playback_sim FILE [LOAD]` shows how quality adapts when decoding
 is LOAD times slower. To try other network speeds and outages:
 
 ```sh
 build/host/playback_sim --stream testdata/media/ID.video.mp4 \
-    testdata/media/ID.audio.mp4 30 [OUTAGE_AT SECONDS]
+    testdata/media/ID.audio.mp4 30 [OUTAGE_AT SECONDS] [--seek AT TO]...
 ```
 
 `make test` also reads each DASH file through `mp4_stream.c` in random
-pieces and small rings, and checks every sample against the merged file.
-It also runs `stream_feed.c` against a fake network that serves the two
-files, reuses or drops connections, and checks that only one request is in
-flight, none asks for more than fits, reads are paced, and both streams
-arrive whole.
+pieces and small rings, and checks every sample against the merged file,
+then seeks to random segments and checks the samples after each. It also
+runs `stream_feed.c` against a fake network that serves the two files,
+reuses or drops connections, seeks now and then, and checks that only one
+request is in flight, none asks for more than fits, reads are paced, and
+both streams arrive whole.
 
 `make test` also checks the RGB565 conversion pixel by pixel against a
 floating-point reference, for every scale of small sizes, both byte orders

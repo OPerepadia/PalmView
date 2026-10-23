@@ -2,7 +2,8 @@
 
 /* Feeds a YouTube DASH stream to Mp4Stream in random pieces through a
  * small ring, and checks every sample against the same track of the
- * merged MP4 (pview merge output).
+ * merged MP4 (pview merge output). Then seeks to random segments and
+ * checks the samples that follow each one.
  *
  *   stream_test PART.mp4 MERGED.mp4 RING_KB SEED
  */
@@ -12,6 +13,11 @@
 #include "mp4_stream.h"
 
 #define BUFFER_CAPACITY 65536
+#define MAX_SAMPLES 65536
+#define SEEKS 8
+#define SAMPLES_AFTER_SEEK 300
+
+static Mp4Sample gWant[MAX_SAMPLES];
 
 static Err ReadFile(void *fileP, UInt32 offset, void *bufferP, UInt32 length)
 {
@@ -44,6 +50,40 @@ static int Fail(const char *messageP, UInt32 sample)
     return 1;
 }
 
+/* Writes the stream from where it stands in random pieces, and compares
+ * up to count samples with gWant from first on. */
+static int Compare(Mp4Stream *streamP, const UInt8 *partP, UInt32 partSize,
+                   UInt32 first, UInt32 samples, UInt32 count, FILE *mergedP)
+{
+    static UInt8 got[BUFFER_CAPACITY], want[BUFFER_CAPACITY];
+    UInt32 sent = streamP->writeOffset, i = first;
+    Mp4Sample s;
+    while (i < samples && i < first + count) {
+        UInt16 result;
+        UInt32 n = (UInt32)(rand() % 4 == 0 ? rand() % 16 + 1 : rand() % 16384 + 1);
+        if (n > partSize - sent) n = partSize - sent;
+        if (n > Mp4StreamSpace(streamP)) n = Mp4StreamSpace(streamP);
+        Mp4StreamWrite(streamP, partP + sent, n);
+        sent += n;
+        while (i < first + count && (result = Mp4StreamNext(streamP, &s, got,
+                sizeof(got))) == mp4StreamSample) {
+            const Mp4Sample *w = &gWant[i];
+            if (s.size != w->size || s.dts != w->dts || s.cto != w->cto ||
+                s.sync != w->sync)
+                return Fail("sample differs", i);
+            if (ReadFile(mergedP, w->offset, want, w->size) != errNone ||
+                memcmp(got, want, s.size) != 0)
+                return Fail("sample data differs", i);
+            i++;
+        }
+        if (i == first + count) break;
+        if (result == mp4StreamEnd) break;
+        if (result == mp4StreamError) return Fail("stream error", i);
+        if (n == 0) return Fail("waiting for bytes that cannot come", i);
+    }
+    return i == samples || i == first + count ? 0 : Fail("stream ended early", i);
+}
+
 int main(int argc, char **argv)
 {
     static Mp4Reader reader;
@@ -52,7 +92,7 @@ int main(int argc, char **argv)
     Mp4ReadTrack track, *wantTrackP;
     Mp4Sample s, w;
     UInt8 *partP, *ringP;
-    UInt32 partSize, mergedSize, sent = 0, samples = 0, ringSize;
+    UInt32 partSize, mergedSize, sent = 0, samples = 0, ringSize, k;
     FILE *mergedP;
     if (argc != 5) {
         fprintf(stderr, "usage: stream_test PART.mp4 MERGED.mp4 RING_KB SEED\n");
@@ -99,6 +139,7 @@ int main(int argc, char **argv)
                 mp4StreamSample) {
             if (!Mp4ReaderNext(&reader, wantTrackP, &w))
                 return Fail("more samples than the merged file", samples);
+            if (samples < MAX_SAMPLES) gWant[samples] = w;
             if (s.size != w.size || s.dts != w.dts || s.cto != w.cto ||
                 s.sync != w.sync)
                 return Fail("sample differs", samples);
@@ -117,7 +158,31 @@ int main(int argc, char **argv)
     }
     if (samples != wantTrackP->sampleCount)
         return Fail("fewer samples than the merged file", samples);
-    printf("stream ok: %s, %u samples, %u KB ring\n", argv[1], (unsigned)samples,
+    if (samples > MAX_SAMPLES) return Fail("too many samples to check seeks", 0);
+    if (stream.segmentCount == 0) return Fail("no segment index", 0);
+    for (k = 0; k < SEEKS; k++) {
+        /* The first and last segments, then random ones */
+        UInt16 segment = (UInt16)(k == 0 ? 0U : k == 1 ? stream.segmentCount - 1U
+            : (UInt32)rand() % stream.segmentCount);
+        /* Index times leave out the edit list's offset: line them up by
+         * the first frame shown. */
+        UInt32 time = stream.segmentsP[segment].time, first = 0;
+        UInt32 shift = gWant[0].dts + (UInt32)gWant[0].cto - stream.segmentsP[0].time;
+        if (Mp4StreamFindSegment(&stream, time) != segment ||
+            (time != 0 && Mp4StreamFindSegment(&stream, time - 1) != segment - 1))
+            return Fail("segment lookup", segment);
+        while (first < samples &&
+               gWant[first].dts + (UInt32)gWant[first].cto < time + shift)
+            first++;
+        if (first == samples || !gWant[first].sync)
+            return Fail("no keyframe where a segment starts", segment);
+        if (!Mp4StreamSeek(&stream, segment)) return Fail("seek refused", segment);
+        if (Compare(&stream, partP, partSize, first, samples,
+                SAMPLES_AFTER_SEEK, mergedP) != 0)
+            return 1;
+    }
+    printf("stream ok: %s, %u samples, %u segments, %u KB ring\n", argv[1],
+        (unsigned)samples, (unsigned)stream.segmentCount,
         (unsigned)(ringSize / 1024));
     Mp4StreamClose(&stream);
     free(ringP);

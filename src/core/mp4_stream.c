@@ -37,7 +37,10 @@ UInt16 Mp4StreamOpen(Mp4Stream *s, UInt8 *ringP, UInt32 capacity,
 void Mp4StreamClose(Mp4Stream *s)
 {
     if (s->boxP != 0) MemPtrFree(s->boxP);
+    if (s->segmentsP != 0) MemPtrFree(s->segmentsP);
     s->boxP = 0;
+    s->segmentsP = 0;
+    s->segmentCount = 0;
 }
 
 /* The ring */
@@ -123,6 +126,66 @@ static UInt16 ReadMoov(Mp4Stream *s, UInt32 size, UInt32 headerSize)
     return CONTINUE;
 }
 
+/* value * to / from, without overflow for 32-bit times. */
+static UInt32 Rescale(UInt32 value, UInt32 from, UInt32 to)
+{
+    return from == to ? value : value / from * to + value % from * to / from;
+}
+
+/* Reads the sidx at next, all of which has arrived. Without memory, or in
+ * a form it does not handle, the stream just plays without one. */
+static void ReadSidx(Mp4Stream *s, UInt32 size, UInt32 headerSize)
+{
+    UInt8 field[12];
+    UInt32 p = s->next + headerSize, end = s->next + size, scale, time, offset;
+    UInt16 count, i;
+    Boolean wide;
+    if (size < headerSize + 24 || s->trackP->timescale == 0) return;
+    Copy(s, p, field, 12);
+    wide = field[0] != 0;
+    if (wide && size < headerSize + 32) return;
+    scale = Mp4Get32(field + 8);
+    p += 12;
+    Copy(s, p, field, 8);
+    if (wide) {
+        if (Mp4Get32(field) != 0) return;
+        time = Mp4Get32(field + 4);
+        Copy(s, p + 8, field, 8);
+        if (Mp4Get32(field) != 0) return;
+        offset = Mp4Get32(field + 4);
+        p += 16;
+    } else {
+        time = Mp4Get32(field);
+        offset = Mp4Get32(field + 4);
+        p += 8;
+    }
+    Copy(s, p, field, 4);
+    count = (UInt16)Mp4Get32(field);
+    p += 4;
+    if (scale == 0 || count == 0 || p + 12UL * count > end) return;
+    s->segmentsP = (Mp4Segment *)MemPtrNew(sizeof(Mp4Segment) * count);
+    if (s->segmentsP == 0) return;
+    /* Offsets count from the first byte after the sidx. */
+    offset += end;
+    for (i = 0; i < count; i++, p += 12) {
+        UInt32 reference;
+        Copy(s, p, field, 12);
+        reference = Mp4Get32(field);
+        /* A reference to another sidx */
+        if ((reference & 0x80000000UL) != 0) break;
+        s->segmentsP[i].offset = offset;
+        s->segmentsP[i].time = Rescale(time, scale, s->trackP->timescale);
+        offset += reference;
+        time += Mp4Get32(field + 4);
+    }
+    if (i < count || offset > s->totalSize) {
+        MemPtrFree(s->segmentsP);
+        s->segmentsP = 0;
+        return;
+    }
+    s->segmentCount = count;
+}
+
 /* Handles the box at next. */
 static UInt16 ReadBox(Mp4Stream *s)
 {
@@ -162,7 +225,7 @@ static UInt16 ReadBox(Mp4Stream *s)
                 mp4MergeOk)
             return Fail(s, s->iter.status, s->iter.line);
         /* Without tfdt, fragments follow each other. */
-        if (s->iter.startTime != 0) s->dts = s->iter.startTime;
+        if (s->iter.hasStartTime) s->dts = s->iter.startTime;
         s->inFragment = true;
         s->havePending = false;
         return CONTINUE;
@@ -173,6 +236,11 @@ static UInt16 ReadBox(Mp4Stream *s)
         Drop(s, s->next);
         s->state = stateSamples;
         return CONTINUE;
+    }
+    if (type == MP4_FOURCC('s', 'i', 'd', 'x') && s->ready &&
+        s->segmentsP == 0 && size <= s->capacity) {
+        if (available < size) return mp4StreamWait;
+        ReadSidx(s, size, headerSize);
     }
     s->skipEnd = s->next + size;
     s->state = stateSkip;
@@ -251,4 +319,33 @@ UInt16 Mp4StreamNext(Mp4Stream *s, Mp4Sample *sampleP, UInt8 *bufferP,
                      UInt32 capacity)
 {
     return Advance(s, sampleP, bufferP, capacity);
+}
+
+UInt16 Mp4StreamFindSegment(const Mp4Stream *s, UInt32 time)
+{
+    UInt16 low = 0, high = s->segmentCount;
+    while (high - low > 1) {
+        UInt16 middle = (UInt16)((low + high) / 2);
+        if (s->segmentsP[middle].time <= time) low = middle;
+        else high = middle;
+    }
+    return low;
+}
+
+Boolean Mp4StreamSeek(Mp4Stream *s, UInt16 segment)
+{
+    const Mp4Segment *g;
+    if (!s->ready || s->status != mp4MergeOk || segment >= s->segmentCount)
+        return false;
+    g = &s->segmentsP[segment];
+    s->head = 0;
+    s->readOffset = g->offset;
+    s->writeOffset = g->offset;
+    s->next = g->offset;
+    s->state = stateBox;
+    s->inFragment = false;
+    s->havePending = false;
+    /* Close enough when there is no tfdt to say. */
+    s->dts = g->time;
+    return true;
 }

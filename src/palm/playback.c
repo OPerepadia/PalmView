@@ -96,6 +96,11 @@ static UInt32 ScaleToMs(UInt32 value, UInt32 scale)
     return value / scale * 1000UL + value % scale * 1000UL / scale;
 }
 
+static UInt32 MsToScale(UInt32 ms, UInt32 scale)
+{
+    return ms / 1000UL * scale + ms % 1000UL * scale / 1000UL;
+}
+
 static UInt32 FrameMs(const Playback *p, UInt32 pts)
 {
     return pts > p->firstPts ? ScaleToMs(pts - p->firstPts, p->timescale) : 0;
@@ -218,7 +223,7 @@ static void OpenSound(Playback *p)
     p->ringOpen = true;
     /* The file's rate can differ from the decoder's (HE-AAC without SBR
      * plays at half rate), so decode a packet first. */
-    FeedSound(p);
+    while (p->decoderRate == 0 && FeedSound(p)) {}
     if (p->decoderRate != 0) p->sampleRate = p->decoderRate;
     if (p->sampleRate == 0 ||
         SndStreamCreate(&p->stream, sndOutput, p->sampleRate, sndInt16Little,
@@ -256,6 +261,10 @@ static Boolean FeedSound(Playback *p)
     result = NextSample(p, STREAM_FEED_AUDIO, &s, true);
     p->audioWaiting = result == sampleWait;
     if (result == sampleWait) return false;
+    /* After a seek, sound starts where the video does. */
+    if (result == sampleReady &&
+        ScaleToMs(s.dts, p->readerP->audio.timescale) < p->seekMs)
+        return true;
     if (result == sampleEnd) {
         p->soundInputEnded = true;
         Call(p, armCmdSoundEnd, 0, 0, 0, 0);
@@ -283,16 +292,10 @@ static void FollowSound(Playback *p)
     p->lastPlayed = p->soundPlayed;
     if (p->soundLastRequest > p->latencyFrames) p->latencyFrames = p->soundLastRequest;
     played = p->soundPlayed > p->latencyFrames ? p->soundPlayed - p->latencyFrames : 0;
-    audioMs = ScaleToMs(played, p->sampleRate);
+    audioMs = p->seekMs + ScaleToMs(played, p->sampleRate);
     diff = (Int32)audioMs - (Int32)VideoMs(p);
-    if (diff < p->windowDiffMin) p->windowDiffMin = diff;
-    if (diff > p->windowDiffMax) p->windowDiffMax = diff;
-    if (diff > CLOCK_SNAP_MS || diff < -CLOCK_SNAP_MS) {
-        p->clockOffsetMs += diff;
-        p->snaps++;
-    } else {
-        p->clockOffsetMs += diff / 4;
-    }
+    if (diff > CLOCK_SNAP_MS || diff < -CLOCK_SNAP_MS) p->clockOffsetMs += diff;
+    else p->clockOffsetMs += diff / 4;
 }
 
 /* Decoders */
@@ -315,18 +318,13 @@ static const Char *StartDecoders(Playback *p)
     p->timescale = t->timescale;
     p->started = false;
     p->ended = false;
-    p->pausedMs = 0;
+    p->pausedMs = p->seekMs;
     p->queued = 0;
     p->draining = false;
     p->inputEnded = false;
     p->catchingUp = false;
     p->decodeMs = 0;
-    p->level = 0;
     p->skippedInRow = 0;
-    p->calmWindows = 0;
-    p->calmNeeded = CALM_WINDOWS;
-    p->strained = false;
-    p->lastLevelDown = 0;
     p->settling = false;
     p->soundInputEnded = false;
     p->soundBuffered = 0;
@@ -337,6 +335,16 @@ static const Char *StartDecoders(Playback *p)
     p->ringOpen = false;
     OpenSound(p);
     return 0;
+}
+
+/* A seek keeps the level: the video is the same. */
+static void ResetLevel(Playback *p)
+{
+    p->level = 0;
+    p->calmWindows = 0;
+    p->calmNeeded = CALM_WINDOWS;
+    p->strained = false;
+    p->lastLevelDown = 0;
 }
 
 static void StopDecoders(Playback *p)
@@ -380,6 +388,7 @@ const Char *PlaybackOpen(Playback *p, const Char *pathP)
         return "Could not open the file.";
     p->fileOpen = true;
     errorP = LoadDecoder(p);
+    ResetLevel(p);
     return errorP != 0 ? errorP : StartDecoders(p);
 }
 
@@ -399,6 +408,9 @@ static void OpenStreams(Playback *p)
     p->buffering = false;
     p->videoWaiting = false;
     p->audioWaiting = false;
+    p->seekMs = 0;
+    p->audioFrom = 0;
+    ResetLevel(p);
     StreamFeedStart(p->feedP, &p->streams[STREAM_FEED_VIDEO],
         &p->streams[STREAM_FEED_AUDIO]);
 }
@@ -450,16 +462,18 @@ static void CloseStreams(Playback *p)
     }
 }
 
+/* Sound that a seek will drop does not count. */
 UInt32 PlaybackBufferedMs(const Playback *p, UInt16 track)
 {
     const Mp4Stream *s = &p->streams[track];
-    UInt32 durationMs, perSecond;
+    UInt32 durationMs, perSecond, from = s->readOffset, buffered;
     if (p->feedP == 0 || Mp4StreamReceived(s)) return 0xFFFFFFFFUL;
     if (!s->ready || s->trackP->timescale == 0) return 0;
+    if (track == STREAM_FEED_AUDIO && p->audioFrom > from) from = p->audioFrom;
+    buffered = s->writeOffset > from ? s->writeOffset - from : 0;
     durationMs = ScaleToMs(s->trackP->duration, s->trackP->timescale);
     perSecond = s->totalSize / (durationMs / 1000UL + 1) + 1;
-    return Mp4StreamBuffered(s) / perSecond * 1000UL +
-        Mp4StreamBuffered(s) % perSecond * 1000UL / perSecond;
+    return buffered / perSecond * 1000UL + buffered % perSecond * 1000UL / perSecond;
 }
 
 /* Both streams have ms of playback in, or as much as their rings hold. */
@@ -617,7 +631,6 @@ static void DecodeOne(Playback *p)
     elapsed = TimGetTicks() - start;
     p->windowBusy += elapsed;
     p->decodeMs = (p->decodeMs * 3 + TicksToMs(elapsed)) / 4;
-    if (p->started && elapsed > p->peakDecode) p->peakDecode = elapsed;
 }
 
 /* Once a second: statistics, and the quality level. */
@@ -630,8 +643,6 @@ static void EndWindow(Playback *p)
     p->fps10 = (UInt16)((UInt32)p->windowShown * 10UL * perSecond / elapsed);
     p->cpuPercent = (UInt16)(p->windowBusy >= elapsed ? 100
         : p->windowBusy * 100UL / elapsed);
-    p->loopsPerSecond = (UInt16)((UInt32)p->windowLoops * perSecond / elapsed);
-    p->stepsPerSecond = (UInt16)((UInt32)p->windowSteps * perSecond / elapsed);
     if (p->feedP != 0) {
         UInt32 received = StreamFeedReceived(p->feedP);
         p->netPercent = (UInt16)(p->windowNet >= elapsed ? 100
@@ -640,8 +651,6 @@ static void EndWindow(Playback *p)
             perSecond / elapsed);
         p->windowReceived = received;
     }
-    p->diffMin = p->windowDiffMin;
-    p->diffMax = p->windowDiffMax;
     p->lateTotal += p->windowLate;
     late = p->windowLate >= MIN_LATE_FRAMES &&
         (UInt32)p->windowLate * 10UL > p->windowFrames;
@@ -655,12 +664,10 @@ static void EndWindow(Playback *p)
             p->calmNeeded < MAX_CALM_WINDOWS)
             p->calmNeeded *= 2;
         p->level++;
-        p->levelChanges++;
         p->calmWindows = 0;
     } else if (!late && p->cpuPercent < CALM_CPU_PERCENT && p->level > 0) {
         if (++p->calmWindows >= p->calmNeeded) {
             p->level--;
-            p->levelChanges++;
             p->lastLevelDown = now;
             p->calmWindows = 0;
         }
@@ -673,10 +680,6 @@ static void EndWindow(Playback *p)
     p->windowFrames = 0;
     p->windowShown = 0;
     p->windowLate = 0;
-    p->windowLoops = 0;
-    p->windowSteps = 0;
-    p->windowDiffMin = 0;
-    p->windowDiffMax = 0;
     p->windowNet = 0;
 }
 
@@ -725,11 +728,13 @@ static Boolean ReadyToStart(Playback *p)
     if (p->soundOn && !p->soundInputEnded && p->soundBuffered < SOUND_PREFILL_FRAMES)
         return false;
     p->started = true;
-    p->firstPts = p->frontPts;
+    /* A seek starts later in the same timeline. */
+    if (!p->firstPtsKnown) {
+        p->firstPts = p->frontPts;
+        p->firstPtsKnown = true;
+    }
     p->peakNet = 0;
-    p->peakDecode = 0;
-    p->peakAway = 0;
-    SetClock(p, 0);
+    SetClock(p, FrameMs(p, p->frontPts));
     p->windowStart = p->clockBase;
     if (p->soundOn && SndStreamStart(p->stream) == errNone) {
         p->soundStarted = true;
@@ -897,20 +902,12 @@ Int32 PlaybackStep(Playback *p)
     UInt32 start = TimGetTicks(), slice = MsToTicks(STEP_SLICE_MS);
     UInt32 feedInterval = MsToTicks(FEED_INTERVAL_MS);
     Int32 wait;
-    if (p->started && p->playing && p->stepWait >= 0 &&
-        start - p->stepEnd > (UInt32)p->stepWait &&
-        start - p->stepEnd - (UInt32)p->stepWait > p->peakAway)
-        p->peakAway = start - p->stepEnd - (UInt32)p->stepWait;
-    p->windowLoops++;
     do {
         if (p->feedP != 0 && !p->ended && TimGetTicks() - p->lastFeed >= feedInterval)
             ServeNetwork(p);
         wait = StepOnce(p);
-        p->windowSteps++;
     } while (wait == 0 && TimGetTicks() - start < slice && !EvtEventAvail() &&
              !EvtSysEventAvail(true));
-    p->stepEnd = TimGetTicks();
-    p->stepWait = wait;
     return wait;
 }
 
@@ -925,8 +922,9 @@ void PlaybackPlay(Playback *p)
             p->started = false;
             p->errorP = 0;
             OpenStreams(p);
-        } else if (StartDecoders(p) != 0) {
-            return;
+        } else {
+            ResetLevel(p);
+            if (StartDecoders(p) != 0) return;
         }
     }
     if (p->started) {
@@ -935,7 +933,6 @@ void PlaybackPlay(Playback *p)
     }
     if (!p->buffering) SetSoundPaused(p, false);
     ResetWindow(p);
-    p->stepWait = -1;   /* the pause is not a stall */
     p->playing = true;
 }
 
@@ -947,6 +944,89 @@ void PlaybackPause(Playback *p)
     p->pausedMs = VideoMs(p);
     p->playing = false;
     SetSoundPaused(p, true);
+}
+
+Boolean PlaybackCanSeek(const Playback *p)
+{
+    return p->feedP != 0 && p->firstPtsKnown &&
+        p->streams[STREAM_FEED_VIDEO].segmentCount != 0 &&
+        p->streams[STREAM_FEED_AUDIO].segmentCount != 0 &&
+        p->streams[STREAM_FEED_VIDEO].status == mp4MergeOk &&
+        p->streams[STREAM_FEED_AUDIO].status == mp4MergeOk;
+}
+
+/* Where a video segment starts, on the clock */
+static UInt32 SegmentMs(const Playback *p, UInt16 segment)
+{
+    const Mp4Stream *s = &p->streams[STREAM_FEED_VIDEO];
+    return ScaleToMs(s->segmentsP[segment].time - s->segmentsP[0].time,
+        s->trackP->timescale);
+}
+
+static UInt16 FindSegment(const Playback *p, UInt32 ms)
+{
+    const Mp4Stream *s = &p->streams[STREAM_FEED_VIDEO];
+    return Mp4StreamFindSegment(s, s->segmentsP[0].time +
+        MsToScale(ms, s->trackP->timescale));
+}
+
+/* Video goes back to the start of the segment, which begins with a
+ * keyframe, and sound to the segment holding that time. The decoders
+ * start again from there, as they do at the start, and the sound before
+ * the video's start is dropped. */
+static UInt32 SeekSegment(Playback *p, UInt16 video)
+{
+    Mp4Stream *videoP = &p->streams[STREAM_FEED_VIDEO];
+    Mp4Stream *audioP = &p->streams[STREAM_FEED_AUDIO];
+    UInt32 audioScale = audioP->trackP->timescale;
+    UInt32 audioFirst = audioP->segmentsP[0].time;
+    UInt32 ms = SegmentMs(p, video), start, end, lead, length;
+    UInt16 audio = Mp4StreamFindSegment(audioP, audioFirst + MsToScale(ms, audioScale));
+    /* Where in the sound segment ms falls, guessed from its bitrate */
+    start = ScaleToMs(audioP->segmentsP[audio].time - audioFirst, audioScale);
+    end = audio + 1 < audioP->segmentCount
+        ? ScaleToMs(audioP->segmentsP[audio + 1].time - audioFirst, audioScale)
+        : ScaleToMs(audioP->trackP->duration, audioScale);
+    length = (audio + 1 < audioP->segmentCount
+        ? audioP->segmentsP[audio + 1].offset : audioP->totalSize) -
+        audioP->segmentsP[audio].offset;
+    lead = ms > start && end > ms ? ms - start : 0;
+    p->audioFrom = audioP->segmentsP[audio].offset + (lead == 0 ? 0 :
+        length / (end - start) * lead + length % (end - start) * lead / (end - start));
+    StopDecoders(p);
+    Mp4StreamSeek(videoP, video);
+    Mp4StreamSeek(audioP, audio);
+    StreamFeedSeek(p->feedP, videoP->writeOffset, audioP->writeOffset);
+    p->seekMs = ms;
+    p->pausedMs = ms;
+    p->errorP = 0;
+    p->started = false;
+    p->ended = false;
+    p->buffering = false;
+    p->videoWaiting = false;
+    p->audioWaiting = false;
+    p->seeks++;
+    return ms;
+}
+
+UInt32 PlaybackSeek(Playback *p, UInt32 ms)
+{
+    if (!PlaybackCanSeek(p)) return PlaybackPositionMs(p);
+    return SeekSegment(p, FindSegment(p, ms));
+}
+
+/* Forward always lands past the position, however long the segments. */
+UInt32 PlaybackSkip(Playback *p, Boolean forward, UInt32 ms)
+{
+    UInt32 position = PlaybackPositionMs(p);
+    UInt16 segment;
+    if (!PlaybackCanSeek(p)) return position;
+    segment = FindSegment(p, forward ? position + ms : position > ms ? position - ms : 0);
+    if (forward && SegmentMs(p, segment) <= position) {
+        if (segment + 1 >= p->streams[STREAM_FEED_VIDEO].segmentCount) return position;
+        segment++;
+    }
+    return SeekSegment(p, segment);
 }
 
 UInt32 PlaybackPositionMs(const Playback *p)

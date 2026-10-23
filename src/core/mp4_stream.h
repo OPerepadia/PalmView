@@ -16,7 +16,9 @@
  *   if (Mp4StreamSpace(&s) >= length) Mp4StreamWrite(&s, dataP, length);
  *   if (Mp4StreamNext(&s, &sample, bufferP, capacity) == mp4StreamSample)
  *       decode bufferP...
- */
+ *
+ * The segment index (sidx) after the moov, when there is one, lets it
+ * start again at any segment. */
 
 /* Largest moov or moof kept. YouTube's are under 2 KB. */
 #define MP4_STREAM_BOX_CAPACITY 16384UL
@@ -27,6 +29,13 @@ typedef enum Mp4StreamResult {
     mp4StreamEnd,
     mp4StreamError          /* see status and detail */
 } Mp4StreamResult;
+
+/* A segment from the sidx: where its first moof is, and its earliest
+ * presentation time in the track's timescale. */
+typedef struct Mp4Segment {
+    UInt32 offset;
+    UInt32 time;
+} Mp4Segment;
 
 typedef struct Mp4Stream {
     UInt8 *ringP;
@@ -51,6 +60,8 @@ typedef struct Mp4Stream {
     Boolean havePending;
     Mp4FragSample pending;
     UInt32 dts;
+    Mp4Segment *segmentsP;  /* 0 until the sidx is read */
+    UInt16 segmentCount;
 } Mp4Stream;
 
 /* totalSize is the stream's length in bytes. Once the moov has arrived,
@@ -74,5 +85,12 @@ Boolean Mp4StreamReady(Mp4Stream *s);
  * the stream. */
 UInt16 Mp4StreamNext(Mp4Stream *s, Mp4Sample *sampleP, UInt8 *bufferP,
                      UInt32 capacity);
+
+/* The last segment starting at or before time (the track's timescale), or
+ * the first one. Needs segmentCount != 0. */
+UInt16 Mp4StreamFindSegment(const Mp4Stream *s, UInt32 time);
+/* Drops what the ring holds and goes on from the segment's start, where
+ * the next byte written must come from. False without that segment. */
+Boolean Mp4StreamSeek(Mp4Stream *s, UInt16 segment);
 
 #endif

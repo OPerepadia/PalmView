@@ -31,15 +31,17 @@ UInt32 StreamFeedLength(const StreamFeed *f, UInt16 track);
 /* Downloads from the start into the streams, opened with the lengths
  * above. */
 void StreamFeedStart(StreamFeed *f, Mp4Stream *videoP, Mp4Stream *audioP);
+/* Goes on from these offsets, where the streams have been moved to. A
+ * request in flight is dropped with its connection; idle ones are kept. */
+void StreamFeedSeek(StreamFeed *f, UInt32 videoOffset, UInt32 audioOffset);
 /* Moves what has arrived into the rings. Call it often. */
 void StreamFeedStep(StreamFeed *f);
 /* Closes the connections. */
 void StreamFeedStop(StreamFeed *f);
 /* 0 while streaming can go on, or why it cannot. */
 const Char *StreamFeedError(const StreamFeed *f);
-/* Bytes received so far, and connections started again. */
+/* Bytes received so far */
 UInt32 StreamFeedReceived(const StreamFeed *f);
-UInt16 StreamFeedRetries(const StreamFeed *f);
 /* How the last failed connection ended, or 0 if none has. */
 const NetJobResult *StreamFeedFailure(const StreamFeed *f);
 /* The failure that began the last run of retries: what dropped the

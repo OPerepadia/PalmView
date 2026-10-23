@@ -36,6 +36,7 @@
 #define PlayStatusField 1503
 #define PlayPauseButton 1504
 #define PlayDoneButton 1505
+#define PlaySeekGadget 1506
 
 #define AboutAlert 1300
 #define LibraryMissingAlert 1301

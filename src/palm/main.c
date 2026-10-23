@@ -33,10 +33,18 @@
 /* Recent searches kept, newest first; the search field holds 63 chars. */
 #define HISTORY_MAX 8
 #define HISTORY_CAPACITY 64
-/* palmOne's 5-way reports the centre button this way (PalmChars.h). */
+/* palmOne's 5-way reports its buttons this way too (PalmChars.h). */
 #define vchrNavChange 0x0503
+#define navBitLeft 0x0004
+#define navBitRight 0x0008
 #define navBitSelect 0x0010
+#define navChangeLeft 0x0400
+#define navChangeRight 0x0800
 #define navChangeSelect 0x1000
+/* 5-way left and right skip about this far, once no press has come for
+ * SKIP_DELAY_TICKS: presses in a row add up to one seek. */
+#define SKIP_MS 10000UL
+#define SKIP_DELAY_TICKS (SysTicksPerSecond() / 2)
 /* Level 0 is silent. */
 #define VOLUME_LEVELS 11
 #define VOLUME_DEFAULT 6
@@ -120,7 +128,10 @@ typedef struct AppState {
     Boolean resumeOnEnter;
     Boolean prefsChanged;       /* saved when the app stops */
     UInt32 lastCentre;          /* ticks of the last 5-way centre press */
-    UInt16 playView;            /* tapping the status shows diagnostics */
+    UInt32 lastSkip;            /* and of the last left or right one */
+    Boolean seekDragging;       /* the pen is on the seek bar */
+    Boolean skipPending;        /* 5-way presses not applied yet */
+    UInt32 seekTargetMs;        /* where either points */
     Char *historyItems[HISTORY_MAX];    /* the history list's choices */
     Char logDest[24];           /* "a.b.c.d:port" from client.txt, or "" */
     UdpLog *logP;               /* 0 without a log= line */
@@ -1035,6 +1046,78 @@ static void ClearVideoArea(void)
     WinDrawRectangle(&bounds, 0);
 }
 
+static void GetSeekBounds(RectangleType *boundsP)
+{
+    FormType *formP = FrmGetActiveForm();
+    FrmGetObjectBounds(formP, FrmGetObjectIndex(formP, PlaySeekGadget), boundsP);
+}
+
+/* value / total of width, for times of many hours too. */
+static Coord BarX(UInt32 value, UInt32 total, Coord width)
+{
+    if (total == 0) return 0;
+    if (value > total) value = total;
+    while (total > 0x003FFFFFUL) {
+        total >>= 1;
+        value >>= 1;
+    }
+    return (Coord)(value * (UInt32)width / total);
+}
+
+static void FillBar(RectangleType *rP, Coord width, UInt8 gray, UInt8 red)
+{
+    RGBColorType color;
+    color.r = red;
+    color.g = gray;
+    color.b = gray;
+    WinSetForeColorRGB(&color, 0);
+    rP->extent.x = width;
+    WinDrawRectangle(rP, 0);
+}
+
+/* The bar under the video: played, downloaded, and not loaded yet. While
+ * the pen drags it, it shows where the pen points. */
+static void DrawSeekBar(const AppState *s)
+{
+    const Playback *p = s->playbackP;
+    RectangleType bounds, bar;
+    UInt32 duration = 0, position = 0, loaded = 0;
+    Coord played;
+    if (!OnForm(PlayForm)) return;
+    GetSeekBounds(&bounds);
+    WinEraseRectangle(&bounds, 0);
+    if (p == 0 || (duration = PlaybackDurationMs(p)) == 0) return;
+    position = s->seekDragging || s->skipPending ? s->seekTargetMs
+        : PlaybackPositionMs(p);
+    loaded = duration;
+    if (s->feedP != 0) {
+        UInt32 video = PlaybackBufferedMs(p, STREAM_FEED_VIDEO);
+        UInt32 audio = PlaybackBufferedMs(p, STREAM_FEED_AUDIO);
+        loaded = PlaybackPositionMs(p) + (video < audio ? video : audio);
+    }
+    played = BarX(position, duration, bounds.extent.x - 4);
+    WinPushDrawState();
+    RctSetRectangle(&bar, bounds.topLeft.x, bounds.topLeft.y + 2, 0, 2);
+    FillBar(&bar, bounds.extent.x, 0xC8, 0xC8);
+    FillBar(&bar, BarX(loaded, duration, bounds.extent.x), 0x80, 0x80);
+    FillBar(&bar, played, 0x00, 0xCC);
+    RctSetRectangle(&bar, bounds.topLeft.x + played, bounds.topLeft.y + 1, 0, 4);
+    FillBar(&bar, 4, 0x00, 0xCC);
+    WinPopDrawState();
+}
+
+/* The time under the pen's x on the seek bar */
+static UInt32 SeekBarMs(const AppState *s, Coord penX)
+{
+    RectangleType bounds;
+    UInt32 duration = PlaybackDurationMs(s->playbackP), ms;
+    GetSeekBounds(&bounds);
+    if (penX <= bounds.topLeft.x) return 0;
+    ms = (UInt32)(penX - bounds.topLeft.x) * (duration / 1000UL) /
+        (UInt32)bounds.extent.x * 1000UL;
+    return ms < duration ? ms : duration;
+}
+
 static void SetVolume(AppState *s, UInt16 level)
 {
     if (level == s->prefs.volume) return;
@@ -1044,81 +1127,10 @@ static void SetVolume(AppState *s, UInt16 level)
         PlaybackSetVolume(s->playbackP, kVolumeGain[level]);
 }
 
-static void AppendSigned(Char *dstP, UInt16 capacity, Int32 value)
-{
-    Append(dstP, capacity, value < 0 ? "-" : "+");
-    AppendNumber(dstP, capacity, (UInt32)(value < 0 ? -value : value));
-}
-
-/* Tap the status to see these: how the sound stream and the clock behave
- * on this device. */
-static void BuildPlayDetails(const Playback *p, Char *textP, UInt16 capacity)
-{
-    Append(textP, capacity, "Sound ");
-    AppendNumber(textP, capacity, p->soundLastRequest);
-    Append(textP, capacity, "/");
-    AppendNumber(textP, capacity, p->latencyFrames);
-    Append(textP, capacity, ", ring ");
-    AppendNumber(textP, capacity, p->sampleRate != 0
-        ? p->soundBuffered * 1000UL / p->sampleRate : 0);
-    Append(textP, capacity, " ms\nSync ");
-    AppendSigned(textP, capacity, p->diffMin);
-    Append(textP, capacity, "..");
-    AppendSigned(textP, capacity, p->diffMax);
-    Append(textP, capacity, " ms, jumps ");
-    AppendNumber(textP, capacity, p->snaps);
-    Append(textP, capacity, "\nLoops ");
-    AppendNumber(textP, capacity, p->loopsPerSecond);
-    Append(textP, capacity, "/s, late ");
-    AppendNumber(textP, capacity, p->lateTotal);
-    Append(textP, capacity, ", levels ");
-    AppendNumber(textP, capacity, p->levelChanges);
-}
-
-static void AppendBuffered(Char *dstP, UInt16 capacity, UInt32 ms)
-{
-    if (ms == 0xFFFFFFFFUL) {
-        Append(dstP, capacity, "all");
-        return;
-    }
-    AppendNumber(dstP, capacity, ms / 1000UL);
-    Append(dstP, capacity, " s");
-}
-
-static void AppendTicks(Char *dstP, UInt16 capacity, UInt32 ticks)
-{
-    AppendNumber(dstP, capacity, ticks * 1000UL / SysTicksPerSecond());
-}
-
-/* The second tap while streaming: the network, the buffers, and the
- * longest stalls since playback started. */
-static void BuildStreamDetails(const AppState *s, Char *textP, UInt16 capacity)
-{
-    const Playback *p = s->playbackP;
-    Append(textP, capacity, "Net ");
-    AppendNumber(textP, capacity, p->netKBps);
-    Append(textP, capacity, " KB/s, CPU ");
-    AppendNumber(textP, capacity, p->netPercent);
-    Append(textP, capacity, "%, retries ");
-    AppendNumber(textP, capacity, StreamFeedRetries(s->feedP));
-    Append(textP, capacity, "\nBuffer ");
-    AppendBuffered(textP, capacity, PlaybackBufferedMs(p, STREAM_FEED_VIDEO));
-    Append(textP, capacity, " + ");
-    AppendBuffered(textP, capacity, PlaybackBufferedMs(p, STREAM_FEED_AUDIO));
-    Append(textP, capacity, ", waits ");
-    AppendNumber(textP, capacity, p->bufferings);
-    Append(textP, capacity, "\nMax ms: net ");
-    AppendTicks(textP, capacity, p->peakNet);
-    Append(textP, capacity, ", dec ");
-    AppendTicks(textP, capacity, p->peakDecode);
-    Append(textP, capacity, ", away ");
-    AppendTicks(textP, capacity, p->peakAway);
-}
-
 static void UpdatePlayStatus(AppState *s)
 {
     static const Char kQuality[PLAYBACK_LEVELS][12] = {
-        "full", "fast B", "fast", "half rate"
+        "Full", "Fast B", "Fast", "Half rate"
     };
     const Playback *p = s->playbackP;
     Char *textP = s->playStatus;
@@ -1140,16 +1152,12 @@ static void UpdatePlayStatus(AppState *s)
         SetFieldText(PlayStatusField, textP);
         return;
     }
-    if (s->playView != 0) {
-        if (s->playView == 1) BuildPlayDetails(p, textP, capacity);
-        else BuildStreamDetails(s, textP, capacity);
-        SetFieldText(PlayStatusField, textP);
-        return;
-    }
-    AppendClock(textP, capacity, PlaybackPositionMs(p));
+    AppendClock(textP, capacity, s->seekDragging || s->skipPending
+        ? s->seekTargetMs : PlaybackPositionMs(p));
     Append(textP, capacity, " / ");
     AppendClock(textP, capacity, PlaybackDurationMs(p));
-    if (p->ended) Append(textP, capacity, "  Ended");
+    if (s->seekDragging || s->skipPending) Append(textP, capacity, "  Seek");
+    else if (p->ended) Append(textP, capacity, "  Ended");
     else if (!p->playing) Append(textP, capacity, "  Paused");
     else if (p->buffering || (s->feedP != 0 && !p->started))
         Append(textP, capacity, "  Buffering");
@@ -1165,10 +1173,16 @@ static void UpdatePlayStatus(AppState *s)
         Append(textP, capacity, "\nNo sound: ");
         Append(textP, capacity, p->soundError);
     } else {
-        Append(textP, capacity, "\nQuality: ");
+        Append(textP, capacity, "\n");
         Append(textP, capacity, kQuality[p->level]);
-        Append(textP, capacity, ", sound gaps ");
+        Append(textP, capacity, ", ");
         AppendNumber(textP, capacity, p->soundUnderruns);
+        Append(textP, capacity, " gaps");
+    }
+    if (s->feedP != 0) {
+        Append(textP, capacity, ", ");
+        AppendNumber(textP, capacity, p->netKBps);
+        Append(textP, capacity, " KB/s");
     }
     if (p->decodeErrors + p->audioErrors != 0) {
         Append(textP, capacity, ", errors ");
@@ -1226,9 +1240,10 @@ static void OpenPlayForm(AppState *s)
     MemMove(s->playTitle, nameP, length);
     s->playTitle[length] = '\0';
     StrCopy(s->playStatus, s->playPath[0] != '\0' ? "Loading..." : "Connecting...");
-    s->playView = 0;
     FldSetTextPtr((FieldType *)GetObject(PlayTitleField), s->playTitle);
     FldSetTextPtr((FieldType *)GetObject(PlayStatusField), s->playStatus);
+    s->seekDragging = false;
+    s->skipPending = false;
     FrmDrawForm(formP);
     ClearVideoArea();
 
@@ -1251,6 +1266,7 @@ static void OpenPlayForm(AppState *s)
     PlaybackPlay(s->playbackP);
     s->playWait = 0;
     s->playStatusTicks = TimGetTicks();
+    DrawSeekBar(s);
 }
 
 static void TogglePause(AppState *s)
@@ -1267,6 +1283,78 @@ static void TogglePause(AppState *s)
         p->playing ? "Pause" : "Play");
     s->playWait = 0;
     UpdatePlayStatus(s);
+    DrawSeekBar(s);
+}
+
+/* After a seek: an ended video plays again from there. */
+static void FinishSeek(AppState *s, Boolean wasEnded)
+{
+    Playback *p = s->playbackP;
+    if (wasEnded) PlaybackPlay(p);
+    CtlSetLabel((ControlType *)GetObject(PlayPauseButton),
+        p->playing ? "Pause" : "Play");
+    s->playWait = 0;
+    UpdatePlayStatus(s);
+    DrawSeekBar(s);
+}
+
+/* Moves the target; StepPlayback seeks once the presses stop. */
+static void Skip(AppState *s, Boolean forward)
+{
+    Playback *p = s->playbackP;
+    UInt32 now = TimGetTicks(), from, duration = PlaybackDurationMs(p);
+    /* One press may arrive as two events. */
+    if (now - s->lastSkip < SysTicksPerSecond() / 4 || !PlaybackCanSeek(p))
+        return;
+    s->lastSkip = now;
+    from = s->skipPending ? s->seekTargetMs : PlaybackPositionMs(p);
+    s->seekTargetMs = forward ? (from + SKIP_MS < duration ? from + SKIP_MS : duration)
+        : from > SKIP_MS ? from - SKIP_MS : 0;
+    s->skipPending = true;
+    UpdatePlayStatus(s);
+    DrawSeekBar(s);
+}
+
+static void FinishSkip(AppState *s)
+{
+    Playback *p = s->playbackP;
+    UInt32 position = PlaybackPositionMs(p);
+    Boolean wasEnded = p->ended, forward = s->seekTargetMs > position;
+    s->skipPending = false;
+    PlaybackSkip(p, forward, forward ? s->seekTargetMs - position
+        : position - s->seekTargetMs);
+    FinishSeek(s, wasEnded);
+}
+
+/* The pen on the seek bar: dragging shows where it points, lifting it
+ * seeks there. Returns true if the event was the bar's. */
+static Boolean TrackSeekBar(AppState *s, const EventType *eventP)
+{
+    RectangleType bounds;
+    Boolean wasEnded;
+    if (eventP->eType == penDownEvent) {
+        GetSeekBounds(&bounds);
+        /* The bar is thin: take the gap above and below it too. */
+        bounds.topLeft.y -= 1;
+        bounds.extent.y += 2;
+        if (!RctPtInRectangle(eventP->screenX, eventP->screenY, &bounds) ||
+            !PlaybackCanSeek(s->playbackP))
+            return false;
+        s->seekDragging = true;
+    } else if (!s->seekDragging) {
+        return false;
+    }
+    s->seekTargetMs = SeekBarMs(s, eventP->screenX);
+    if (eventP->eType == penUpEvent) {
+        s->seekDragging = false;
+        wasEnded = s->playbackP->ended;
+        PlaybackSeek(s->playbackP, s->seekTargetMs);
+        FinishSeek(s, wasEnded);
+        return true;
+    }
+    UpdatePlayStatus(s);
+    DrawSeekBar(s);
+    return true;
 }
 
 static void ReturnFromPlay(AppState *s)
@@ -1292,13 +1380,26 @@ static void StepPlayback(AppState *s)
     wasPlaying = p->playing;
     s->playWait = PlaybackStep(p);
     now = TimGetTicks();
+    if (s->skipPending) {
+        UInt32 waited = now - s->lastSkip;
+        if (waited >= SKIP_DELAY_TICKS) {
+            FinishSkip(s);
+        } else if (s->playWait < 0 ||
+                   (UInt32)s->playWait > SKIP_DELAY_TICKS - waited) {
+            s->playWait = (Int32)(SKIP_DELAY_TICKS - waited);
+        }
+    }
     if (wasPlaying && p->ended) {
         CtlSetLabel((ControlType *)GetObject(PlayPauseButton), "Replay");
         UpdatePlayStatus(s);
-    } else if (p->playing && now - s->playStatusTicks >= SysTicksPerSecond()) {
+        DrawSeekBar(s);
+    } else if ((p->playing || (s->feedP != 0 && !p->ended)) &&
+               now - s->playStatusTicks >= SysTicksPerSecond()) {
+        /* Paused streams keep downloading: the bar shows it. */
         s->playStatusTicks = now;
         if (s->feedP != 0) {
-            const Char *tagP = p->buffering || !p->started ? "wait" : "play";
+            const Char *tagP = !p->playing ? "pause"
+                : p->buffering || !p->started ? "wait" : "play";
             UdpLogLine(s->logP, tagP, "at % ms, buffer % + % ms",
                 PlaybackPositionMs(p), PlaybackBufferedMs(p, STREAM_FEED_VIDEO),
                 PlaybackBufferedMs(p, STREAM_FEED_AUDIO));
@@ -1308,8 +1409,11 @@ static void StepPlayback(AppState *s)
                 p->level, p->lateTotal,
                 p->peakNet * 1000UL / SysTicksPerSecond());
         }
-        EvtResetAutoOffTimer();
-        UpdatePlayStatus(s);
+        if (p->playing) EvtResetAutoOffTimer();
+        if (!s->seekDragging && !s->skipPending) {
+            UpdatePlayStatus(s);
+            DrawSeekBar(s);
+        }
     }
 }
 
@@ -1370,6 +1474,13 @@ static void ReturnToMain(AppState *s)
     ShowResults(s, true);
 }
 
+/* A 5-way button pressed just now, as palmOne reports it */
+static Boolean NavPressed(const EventType *eventP, UInt16 bit, UInt16 change)
+{
+    return eventP->data.keyDown.chr == vchrNavChange &&
+        (eventP->data.keyDown.keyCode & (bit | change)) == (bit | change);
+}
+
 static Boolean HandleEvent(EventType *eventP, AppState *s)
 {
     FormType *formP;
@@ -1405,7 +1516,10 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
         case frmUpdateEvent:
             FrmDrawForm(FrmGetActiveForm());
             if (OnForm(DetailForm)) RefreshDetail(s);
-            if (OnForm(PlayForm)) ClearVideoArea();
+            if (OnForm(PlayForm)) {
+                ClearVideoArea();
+                DrawSeekBar(s);
+            }
             return true;
         case lstSelectEvent:
             if (eventP->data.lstSelect.listID == ResultList &&
@@ -1466,21 +1580,18 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 return true;
             }
             break;
+        case penMoveEvent:
+        case penUpEvent:
+            if (OnForm(PlayForm) && s->playbackP != 0 && TrackSeekBar(s, eventP))
+                return true;
+            break;
         case penDownEvent:
             if (OnForm(PlayForm) && s->playbackP != 0) {
-                FormType *formP = FrmGetActiveForm();
                 RectangleType bounds;
+                if (TrackSeekBar(s, eventP)) return true;
                 GetVideoBounds(&bounds);
                 if (RctPtInRectangle(eventP->screenX, eventP->screenY, &bounds)) {
                     TogglePause(s);
-                    return true;
-                }
-                FrmGetObjectBounds(formP, FrmGetObjectIndex(formP, PlayStatusField),
-                    &bounds);
-                if (RctPtInRectangle(eventP->screenX, eventP->screenY, &bounds)) {
-                    s->playView = (UInt16)((s->playView + 1) %
-                        (s->feedP != 0 ? 3 : 2));
-                    UpdatePlayStatus(s);
                     return true;
                 }
             }
@@ -1524,10 +1635,18 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                     if (s->prefs.volume > 0) SetVolume(s, s->prefs.volume - 1);
                     return true;
                 }
+                if (c == vchrRockerLeft || NavPressed(eventP, navBitLeft, navChangeLeft)) {
+                    Skip(s, false);
+                    return true;
+                }
+                if (c == vchrRockerRight ||
+                        NavPressed(eventP, navBitRight, navChangeRight)) {
+                    Skip(s, true);
+                    return true;
+                }
                 /* One press may arrive as both of these. */
-                if (c == vchrRockerCenter || (c == vchrNavChange &&
-                        (eventP->data.keyDown.keyCode & (navBitSelect |
-                            navChangeSelect)) == (navBitSelect | navChangeSelect))) {
+                if (c == vchrRockerCenter ||
+                        NavPressed(eventP, navBitSelect, navChangeSelect)) {
                     UInt32 now = TimGetTicks();
                     if (now - s->lastCentre >= SysTicksPerSecond() / 4)
                         TogglePause(s);

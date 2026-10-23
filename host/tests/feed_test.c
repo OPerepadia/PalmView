@@ -6,7 +6,8 @@
  * at a time, none asking for more than its ring has room for, ranges in
  * order, reads paced while a ring is at least half full, and both streams
  * read to the end. Kept connections are reused,
- * and some are dropped by the "server" to exercise reconnects.
+ * and some are dropped by the "server" to exercise reconnects. Now and
+ * then both streams seek to random segments, mid-request or not.
  *
  *   feed_test VIDEO.mp4 AUDIO.mp4 VIDEO_RING_KB AUDIO_RING_KB SEED
  */
@@ -21,6 +22,7 @@ UInt16 SysTicksPerSecond(void) { return 100; }
 
 #define MAX_LOOPS 2000000UL
 #define SAMPLE_CAPACITY 65536
+#define SEEKS 4
 
 typedef struct Source {
     const char *hostP;
@@ -46,7 +48,7 @@ struct NetJob {
 };
 
 static Source gSources[2];
-static int gActive, gRequests, gReused, gDropped, gClosed;
+static int gActive, gRequests, gReused, gDropped, gClosed, gSeeks;
 
 static int Fail(const char *messageP)
 {
@@ -253,6 +255,20 @@ int main(int argc, char **argv)
                     (Mp4StreamBuffered(&streams[i]) < 8192 &&
                      !Mp4StreamReceived(&streams[i]))))
                 waiting = true;
+        if (gSeeks < SEEKS && rand() % 2000 == 0 &&
+                streams[0].segmentCount != 0 && streams[1].segmentCount != 0) {
+            UInt32 offsets[2];
+            for (i = 0; i < 2; i++) {
+                UInt16 segment = (UInt16)((UInt32)rand() % streams[i].segmentCount);
+                if (!Mp4StreamSeek(&streams[i], segment)) Fail("seek refused");
+                offsets[i] = streams[i].segmentsP[segment].offset;
+                gSources[i].next = offsets[i];
+                ended[i] = false;
+            }
+            StreamFeedSeek(f, offsets[0], offsets[1]);
+            gSeeks++;
+            continue;
+        }
         if (waiting) continue;
         for (i = 0; i < 2; i++) {
             Mp4Sample s;
@@ -267,8 +283,8 @@ int main(int argc, char **argv)
     for (i = 0; i < 2; i++)
         if (gSources[i].next != gSources[i].size) Fail("a stream was cut short");
     printf("feed ok: %u + %u samples, %d requests (%d reused, %d dropped, "
-        "%d closed), rings %u + %u KB\n", (unsigned)taken[0],
-        (unsigned)taken[1], gRequests, gReused, gDropped, gClosed,
+        "%d closed), %d seeks, rings %u + %u KB\n", (unsigned)taken[0],
+        (unsigned)taken[1], gRequests, gReused, gDropped, gClosed, gSeeks,
         (unsigned)(ringBytes[0] / 1024), (unsigned)(ringBytes[1] / 1024));
     StreamFeedFree(f);
     return 0;

@@ -54,6 +54,7 @@ typedef struct Mp4FragIter {
     UInt16 status;
     UInt32 line;            /* source line of the failure */
     UInt32 startTime;       /* from tfdt; 0 without one */
+    Boolean hasStartTime;
     const UInt8 *nextP;     /* where the next trun may be */
     UInt32 left;
     const UInt8 *entryP;
