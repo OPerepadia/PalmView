@@ -4,8 +4,8 @@
  * files, while a fake player takes samples out and stops to buffer when
  * either stream runs dry. Checks the feed's rules: one request in flight
  * at a time, none asking for more than its ring has room for, ranges in
- * order, reads paced while a ring is at least half full, and both streams
- * read to the end. Kept connections are reused,
+ * order, reads paced while a ring is at least half full and less hard
+ * below half while the player plays, and both streams read to the end. Kept connections are reused,
  * and some are dropped by the "server" to exercise reconnects. Now and
  * then both streams seek to random segments, mid-request or not.
  *
@@ -32,6 +32,7 @@ typedef struct Source {
     Mp4Stream *streamP;
     UInt32 pacedSecond;     /* gTicks / 100 of the bytes counted below */
     UInt32 pacedBytes;      /* read in that second with the ring half full */
+    UInt32 playingBytes;    /* and with it below half while playing */
 } Source;
 
 enum { jobConnecting, jobSending, jobDelivering, jobIdle, jobDead };
@@ -49,6 +50,7 @@ struct NetJob {
 
 static Source gSources[2];
 static int gActive, gRequests, gReused, gDropped, gClosed, gSeeks;
+static Boolean gPlaying;
 
 static int Fail(const char *messageP)
 {
@@ -161,15 +163,19 @@ UInt16 NetJobStep(NetJob **jobPP)
     }
     n = (UInt32)(rand() % NET_JOB_IO_CAPACITY + 1);
     if (n > jobP->end - jobP->next + 1) n = jobP->end - jobP->next + 1;
-    if (Mp4StreamBuffered(jobP->sourceP->streamP) >=
-            jobP->sourceP->streamP->capacity / 2) {
+    {
         Source *sourceP = jobP->sourceP;
         if (sourceP->pacedSecond != gTicks / 100) {
             sourceP->pacedSecond = gTicks / 100;
             sourceP->pacedBytes = 0;
+            sourceP->playingBytes = 0;
         }
-        sourceP->pacedBytes += n;
-        if (sourceP->pacedBytes > PACE_BYTES_PER_SECOND + 2 * NET_JOB_IO_CAPACITY)
+        if (Mp4StreamBuffered(sourceP->streamP) >= sourceP->streamP->capacity / 2)
+            sourceP->pacedBytes += n;
+        else if (gPlaying)
+            sourceP->playingBytes += n;
+        if (sourceP->pacedBytes > PACE_BYTES_PER_SECOND + 2 * NET_JOB_IO_CAPACITY ||
+            sourceP->playingBytes > 2 * PACE_BYTES_PER_SECOND + 2 * NET_JOB_IO_CAPACITY)
             Fail("paced reads too fast");
     }
     if (jobP->bodyProcP(jobP->contextP, jobP->sourceP->dataP + jobP->next,
@@ -247,7 +253,7 @@ int main(int argc, char **argv)
         Boolean waiting = false;
         if (loops == MAX_LOOPS) Fail("streams never finished");
         gTicks += 2;
-        StreamFeedStep(f);
+        StreamFeedStep(f, gPlaying);
         if (StreamFeedError(f) != 0) Fail(StreamFeedError(f));
         /* The player waits while either stream has nothing ready. */
         for (i = 0; i < 2; i++)
@@ -269,6 +275,7 @@ int main(int argc, char **argv)
             gSeeks++;
             continue;
         }
+        gPlaying = !waiting;
         if (waiting) continue;
         for (i = 0; i < 2; i++) {
             Mp4Sample s;

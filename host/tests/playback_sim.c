@@ -224,12 +224,13 @@ void StreamFeedStart(StreamFeed *f, Mp4Stream *videoP, Mp4Stream *audioP)
     f->lastMs = gNowMs;
 }
 
-void StreamFeedStep(StreamFeed *f)
+void StreamFeedStep(StreamFeed *f, Boolean playing)
 {
     static UInt8 buffer[4096];
     double arrived = 0;
     Boolean taking[2];
     UInt16 i;
+    (void)playing;
     if (gNowMs < f->outageStart || gNowMs >= f->outageEnd)
         arrived = (gNowMs - f->lastMs) * f->bytesPerMs;
     f->lastMs = gNowMs;

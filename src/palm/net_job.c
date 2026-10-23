@@ -153,9 +153,19 @@ static UInt16 Finish(NetJob **jobPP)
             r->tlsError < 0 ? (UInt32)-r->tlsError : (UInt32)r->tlsError);
     if (jobP->tlsOpen) CloseTls(jobP, cancel);
     else if (jobP->sessionId != 0) CloseTls(jobP, true);
-    if (jobP->socket >= 0)
+    if (jobP->socket >= 0) {
+        /* Reset rather than close politely: the TX holds a closed
+         * connection for minutes, and after a few it cannot open more
+         * (netErrTooManyTCPConnections). */
+        NetSocketLingerType linger;
+        linger.onOff = 1;
+        linger.time = 0;
+        NetLibSocketOptionSet(jobP->config.netRefNum, jobP->socket,
+            netSocketOptLevelSocket, netSocketOptSockLinger, &linger,
+            sizeof(linger), jobP->config.stepTimeoutTicks, &error);
         NetLibSocketClose(jobP->config.netRefNum, jobP->socket,
             jobP->config.stepTimeoutTicks, &error);
+    }
     MemPtrFree(jobP);
     *jobPP = 0;
     return netJobFinished;

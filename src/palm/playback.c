@@ -890,7 +890,7 @@ static Int32 StepOnce(Playback *p)
 static void ServeNetwork(Playback *p)
 {
     UInt32 start = TimGetTicks();
-    StreamFeedStep(p->feedP);
+    StreamFeedStep(p->feedP, p->playing && p->started && !p->buffering);
     p->lastFeed = TimGetTicks();
     p->windowNet += p->lastFeed - start;
     if (p->started && p->lastFeed - start > p->peakNet)

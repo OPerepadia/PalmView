@@ -34,8 +34,9 @@ void StreamFeedStart(StreamFeed *f, Mp4Stream *videoP, Mp4Stream *audioP);
 /* Goes on from these offsets, where the streams have been moved to. A
  * request in flight is dropped with its connection; idle ones are kept. */
 void StreamFeedSeek(StreamFeed *f, UInt32 videoOffset, UInt32 audioOffset);
-/* Moves what has arrived into the rings. Call it often. */
-void StreamFeedStep(StreamFeed *f);
+/* Moves what has arrived into the rings. Call it often, saying whether
+ * video is playing: reads are paced harder then. */
+void StreamFeedStep(StreamFeed *f, Boolean playing);
 /* Closes the connections. */
 void StreamFeedStop(StreamFeed *f);
 /* 0 while streaming can go on, or why it cannot. */

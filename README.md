@@ -136,7 +136,8 @@ network log below has more.
   at no more than 32 KB/s, a little above both streams' bitrate together.
   A response comes at up to 200 KB/s, and each 16 KB TLS record is
   decrypted in one go: read that fast, too many frames come late. Below
-  half, for example at the start, it is read at full speed.
+  half it is read at 64 KB/s while video plays, as after a seek, and at
+  full speed while nothing plays, as at the start.
 - A response that sends nothing for 5 s is asked for again on a new
   connection. A dropped connection starts again where it stopped. Redirects
   to another YouTube server are followed, for downloads too.

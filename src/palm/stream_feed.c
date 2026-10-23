@@ -25,7 +25,9 @@
 /* While the stream being fetched has at least half its ring buffered, its
  * response is read at no more than this, a little above both streams'
  * bitrate together. Each 16 KB TLS record is decrypted in one go, and a
- * frame due meanwhile is late: read faster, and too many frames are. */
+ * frame due meanwhile is late: read faster, and too many frames are.
+ * Below half, it is read at twice this while video plays, and as fast as
+ * it comes while nothing does. */
 #define PACE_BYTES_PER_SECOND (32UL * 1024UL)
 
 /* A response that sends nothing this long is taken as stalled, and asked
@@ -266,14 +268,19 @@ static UInt32 Want(const FeedTrack *t)
     return (space << 8) / t->streamP->capacity + 1;
 }
 
-void StreamFeedStep(StreamFeed *f)
+void StreamFeedStep(StreamFeed *f, Boolean playing)
 {
     FeedTrack *t = f->activeP;
     UInt32 now = TimGetTicks(), elapsed = now - f->paceTicks;
-    Boolean paced;
+    UInt32 rate = PACE_BYTES_PER_SECOND;
+    Boolean paced = playing, low = false;
     UInt16 i;
     if (elapsed > SysTicksPerSecond()) elapsed = SysTicksPerSecond();
-    f->allowance += elapsed * PACE_BYTES_PER_SECOND / SysTicksPerSecond();
+    if (t != 0 && Mp4StreamBuffered(t->streamP) < t->streamP->capacity / 2) {
+        low = true;
+        rate *= 2;
+    }
+    f->allowance += elapsed * rate / SysTicksPerSecond();
     if (f->allowance > NET_JOB_IO_CAPACITY) f->allowance = NET_JOB_IO_CAPACITY;
     f->paceTicks = now;
     if (f->errorP != 0) return;
@@ -286,7 +293,7 @@ void StreamFeedStep(StreamFeed *f)
         Request(f, t);
         return;
     }
-    paced = Mp4StreamBuffered(t->streamP) >= t->streamP->capacity / 2;
+    if (!low) paced = true;
     for (i = 0; i < READS_PER_STEP; i++) {
         UInt32 before = t->offset;
         Boolean receiving = NetJobReceiving(t->jobP);
