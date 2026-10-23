@@ -769,7 +769,7 @@ static void StartChunk(AppState *s)
     UInt16 length;
     if (end >= formatP->contentLength) end = formatP->contentLength - 1;
     length = YtBuildMediaRequest(&s->client, formatP->url, s->offset, end,
-        s->request, sizeof(s->request));
+        false, s->request, sizeof(s->request));
     if (length == 0 || !YtSplitUrl(formatP->url, s->host, sizeof(s->host),
             &pathP)) {
         FailDownload(s, "Stream URL is not usable.");

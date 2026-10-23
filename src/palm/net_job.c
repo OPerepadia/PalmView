@@ -25,7 +25,8 @@ enum {
     jobStateTlsOpen,
     jobStateTlsHandshake,
     jobStateSend,
-    jobStateRead
+    jobStateRead,
+    jobStateIdle
 };
 
 struct NetJob {
@@ -89,6 +90,12 @@ static Boolean Connecting(Err error)
 static Int32 IoTimeout(const NetJob *jobP)
 {
     return jobP->config.poll ? 1 : jobP->config.stepTimeoutTicks;
+}
+
+static Int32 IdleTimeout(const NetJob *jobP)
+{
+    return jobP->config.idleTimeoutTicks != 0 ? jobP->config.idleTimeoutTicks
+        : jobP->config.operationTimeoutTicks;
 }
 
 /* For polling jobs: false if TLS has nothing to work on yet. */
@@ -213,6 +220,22 @@ Boolean NetJobReceiving(const NetJob *jobP)
     return jobP != 0 && jobP->state == jobStateRead;
 }
 
+Boolean NetJobSend(NetJob *jobP, const Char *requestP, UInt16 requestLength)
+{
+    NetJobResult *resultP = jobP->resultP;
+    if (jobP->state != jobStateIdle || jobP->cancelled) return false;
+    MemSet(resultP, sizeof(*resultP), 0);
+    resultP->reused = true;
+    resultP->phase = netPhaseSend;
+    jobP->phaseStart = TimGetTicks();
+    jobP->requestP = requestP;
+    jobP->requestLength = requestLength;
+    jobP->sent = 0;
+    jobP->bufferFilled = false;
+    jobP->state = jobStateSend;
+    return true;
+}
+
 void NetJobSetTag(NetJob *jobP, const Char *tagP)
 {
     jobP->tagP = tagP;
@@ -274,7 +297,7 @@ static UInt16 StepRead(NetJob **jobPP)
     if (now - jobP->lastRead > SysTicksPerSecond()) jobP->idleStart = now;
     jobP->lastRead = now;
     if (!ShouldTry(jobP)) {
-        if (TimedOut(jobP->idleStart, jobP->config.operationTimeoutTicks))
+        if (TimedOut(jobP->idleStart, IdleTimeout(jobP)))
             return NetworkFailure(jobPP, netErrTimeout);
         return netJobRunning;
     }
@@ -326,8 +349,9 @@ static UInt16 StepRead(NetJob **jobPP)
     }
     if (jobP->parser.connectionComplete ||
         (received == 0 && tlsResult.status == palmTlsStatusOk)) {
-        if (!jobP->parser.connectionComplete &&
-            HttpParserFinish(&jobP->parser) != httpOk) {
+        /* Ended by the server closing, rather than by the response. */
+        Boolean closed = !jobP->parser.connectionComplete;
+        if (closed && HttpParserFinish(&jobP->parser) != httpOk) {
             resultP->status = netJobHttpError;
             resultP->platformError = jobP->parser.parseStatus;
             return Finish(jobPP);
@@ -335,9 +359,16 @@ static UInt16 StepRead(NetJob **jobPP)
         resultP->httpStatus = jobP->parser.statusCode;
         resultP->status = resultP->httpStatus >= 200 &&
             resultP->httpStatus <= 299 ? netJobOk : netJobHttpError;
+        if (jobP->config.keepAlive && !closed &&
+            jobP->parser.connectionReusable && resultP->status == netJobOk) {
+            UdpLogLine(jobP->config.logP, jobP->tagP, "idle http % got %",
+                resultP->httpStatus, resultP->received, 0);
+            jobP->state = jobStateIdle;
+            return netJobIdle;
+        }
         return Finish(jobPP);
     }
-    if (TimedOut(jobP->idleStart, jobP->config.operationTimeoutTicks))
+    if (TimedOut(jobP->idleStart, IdleTimeout(jobP)))
         return NetworkFailure(jobPP, netErrTimeout);
     return netJobRunning;
 }
@@ -542,6 +573,8 @@ static UInt16 Step(NetJob **jobPP)
         }
         case jobStateRead:
             return StepRead(jobPP);
+        case jobStateIdle:
+            return netJobIdle;
         default:
             jobP->resultP->status = netJobNetworkError;
             jobP->resultP->platformError = sysErrParamErr;

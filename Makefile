@@ -96,6 +96,7 @@ PVIEW := $(HOST_DIR)/pview
 JSON_DUMP := $(HOST_DIR)/json_dump
 UNIT_TESTS := $(HOST_DIR)/unit_tests
 STREAM_TEST := $(HOST_DIR)/stream_test
+FEED_TEST := $(HOST_DIR)/feed_test
 
 .PHONY: all debug release bench tls dist test test-arm test-playback host arm clean
 .DELETE_ON_ERROR:
@@ -278,10 +279,15 @@ $(STREAM_TEST): host/tests/stream_test.c $(CORE_SOURCES) $(wildcard src/core/*.h
 		host/shim/PalmOS.h | $(HOST_DIR)
 	$(HOST_CC) $(HOST_FLAGS) host/tests/stream_test.c $(CORE_SOURCES) -o $@
 
+$(FEED_TEST): host/tests/feed_test.c src/palm/stream_feed.c src/palm/stream_feed.h \
+		src/palm/net_job.h $(CORE_SOURCES) $(wildcard src/core/*.h) \
+		host/shim/PalmOS.h | $(HOST_DIR)
+	$(HOST_CC) $(HOST_FLAGS) -Isrc/palm host/tests/feed_test.c $(CORE_SOURCES) -o $@
+
 # Offline tests. JSON samples in testdata/ (not committed) are compared
 # with Python's parser when present. Downloaded streams in testdata/media/
 # are read as they would arrive over the network, through small rings.
-test: $(JSON_DUMP) $(UNIT_TESTS) $(PVIEW) $(STREAM_TEST)
+test: $(JSON_DUMP) $(UNIT_TESTS) $(PVIEW) $(STREAM_TEST) $(FEED_TEST)
 	$(UNIT_TESTS)
 	@for video in $(wildcard testdata/media/*.video.mp4); do \
 		id=$$(basename $$video .video.mp4); audio=testdata/media/$$id.audio.mp4; \
@@ -290,6 +296,10 @@ test: $(JSON_DUMP) $(UNIT_TESTS) $(PVIEW) $(STREAM_TEST)
 			for ring in 64 24; do \
 				$(STREAM_TEST) $$part $(HOST_DIR)/$$id.merged.mp4 $$ring $$ring || exit 1; \
 			done; \
+		done; \
+		for seed in 1 2 3; do \
+			$(FEED_TEST) $$video $$audio 191 320 $$seed || exit 1; \
+			$(FEED_TEST) $$video $$audio 48 48 $$seed || exit 1; \
 		done; \
 	done
 	@for file in host/tests/edge.json $(wildcard testdata/*.json); do \

@@ -25,7 +25,8 @@ typedef enum NetJobStatus {
 
 typedef enum NetJobProgress {
     netJobRunning = 0,
-    netJobFinished
+    netJobFinished,
+    netJobIdle          /* with keepAlive: done, the connection kept open */
 } NetJobProgress;
 
 typedef enum NetJobPhase {
@@ -48,6 +49,12 @@ typedef struct NetJobConfig {
      * stays non-blocking and is checked first. For jobs that run during
      * playback. */
     Boolean poll;
+    /* How long a response may send nothing before the job fails; 0 for
+     * operationTimeoutTicks. */
+    Int32 idleTimeoutTicks;
+    /* A successful response that leaves the connection reusable makes the
+     * job idle instead of finishing it; NetJobSend sends the next request. */
+    Boolean keepAlive;
     UdpLog *logP;               /* 0 for no log */
 } NetJobConfig;
 
@@ -62,6 +69,7 @@ typedef struct NetJobResult {
     UInt32 received;
     UInt32 handshakeTicks;
     Boolean redirected;     /* a 3xx answer; see NetJobKeepLocation */
+    Boolean reused;         /* sent on a connection kept open */
 } NetJobResult;
 
 typedef struct NetJob NetJob;
@@ -74,8 +82,12 @@ Boolean NetJobStart(NetJob **jobPP, const NetJobConfig *configP,
                     const Char *hostP, const Char *requestP,
                     UInt16 requestLength, HttpBodyProc bodyProcP,
                     void *bodyContextP, NetJobResult *resultP);
-/* Returns netJobFinished once the job is done and freed. */
+/* Returns netJobFinished once the job is done and freed, or netJobIdle
+ * while it waits for NetJobSend. */
 UInt16 NetJobStep(NetJob **jobPP);
+/* Sends the next request on an idle job's connection, with the same body
+ * procedure and result. False if the job is not idle. */
+Boolean NetJobSend(NetJob *jobP, const Char *requestP, UInt16 requestLength);
 /* True once the response is being read: each step may then pass up to
  * NET_JOB_IO_CAPACITY body bytes on. */
 Boolean NetJobReceiving(const NetJob *jobP);

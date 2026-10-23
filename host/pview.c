@@ -230,7 +230,7 @@ static Boolean Download(const YtFormat *formatP, const char *pathP)
         UInt16 length, status;
         if (end >= formatP->contentLength) end = formatP->contentLength - 1;
         length = YtBuildMediaRequest(&gClient, formatP->url, offset, end,
-            request, sizeof(request));
+            false, request, sizeof(request));
         status = HttpsExchange(host, request, length, WriteFile, fileP);
         if (status != 200 && status != 206) {
             fprintf(stderr, "download failed: HTTP %u at %lu\n", status,

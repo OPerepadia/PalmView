@@ -106,11 +106,18 @@ static void TestUrls(void)
     YtClientDefaults(&client);
     length = YtBuildMediaRequest(&client,
         "https://rr1---sn-abc.googlevideo.com/videoplayback?a=1", 100, 4194403,
-        request, sizeof(request));
+        false, request, sizeof(request));
     Expect("media request built", length != 0 &&
         strncmp(request, "GET /videoplayback?a=1&range=100-4194403 HTTP/1.1\r\n"
             "Host: rr1---sn-abc.googlevideo.com\r\n", 85) == 0 &&
-        strstr(request, "\r\n\r\n") == request + length - 4);
+        strstr(request, "Connection: close\r\n\r\n") ==
+            request + length - strlen("Connection: close\r\n\r\n"));
+    length = YtBuildMediaRequest(&client,
+        "https://rr1---sn-abc.googlevideo.com/videoplayback?a=1", 0, 99,
+        true, request, sizeof(request));
+    Expect("keep-alive request built", length != 0 &&
+        strstr(request, "Connection: keep-alive\r\n\r\n") ==
+            request + length - strlen("Connection: keep-alive\r\n\r\n"));
 }
 
 static void TestRedirects(void)

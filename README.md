@@ -118,11 +118,22 @@ wait.
 
 ### Streaming
 
-- `src/palm/stream_feed.c` opens one HTTPS connection per stream. It reads
-  a connection only while that stream's ring has room, so a full ring
-  stalls the server instead of using more memory. A dropped connection
-  starts again where it stopped. Redirects to another YouTube server are
-  followed, for downloads too.
+- `src/palm/stream_feed.c` keeps one HTTPS connection per stream, open
+  between requests. Only one request is in flight at a time, for the stream
+  whose ring is emptier, and it asks for no more than that ring has room
+  for (at most 128 KB). A stream asks again once a quarter of its ring is
+  free. So every byte that arrives can be read at once. On the TX, data left
+  unread on one connection starves the other: neither its data nor a new
+  handshake gets through. Keeping connections open matters too: each new
+  TLS handshake blocks the player for about 2 s.
+- While a stream has at least half its ring buffered, its response is read
+  at no more than 32 KB/s, a little above both streams' bitrate together.
+  A response comes at up to 200 KB/s, and each 16 KB TLS record is
+  decrypted in one go: read that fast, too many frames come late. Below
+  half, for example at the start, it is read at full speed.
+- A response that sends nothing for 5 s is asked for again on a new
+  connection. A dropped connection starts again where it stopped. Redirects
+  to another YouTube server are followed, for downloads too.
 - The two rings share up to 512 KB of the heap, split by bitrate. At 144p
   (about 26 KB/s for both streams) that is about 20 seconds.
 - `src/core/mp4_stream.c` takes each sample out of its ring once all of it
@@ -220,6 +231,10 @@ build/host/playback_sim --stream testdata/media/ID.video.mp4 \
 
 `make test` also reads each DASH file through `mp4_stream.c` in random
 pieces and small rings, and checks every sample against the merged file.
+It also runs `stream_feed.c` against a fake network that serves the two
+files, reuses or drops connections, and checks that only one request is in
+flight, none asks for more than fits, reads are paced, and both streams
+arrive whole.
 
 ## Build
 

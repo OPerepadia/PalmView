@@ -9,9 +9,10 @@
 #include "yt_api.h"
 
 /* Downloads a video's two DASH streams (video, audio) over HTTPS into two
- * Mp4Streams while it plays. Each stream has its own connection, read only
- * while its ring has room. A connection that drops starts again where it
- * stopped. Nothing is written to storage. */
+ * Mp4Streams while it plays. One request at a time, for the stream with
+ * the emptier ring, asks for no more than fits. Each stream keeps its own
+ * connection open between requests. A connection that drops starts again
+ * where it stopped. Nothing is written to storage. */
 
 #define STREAM_FEED_VIDEO 0
 #define STREAM_FEED_AUDIO 1

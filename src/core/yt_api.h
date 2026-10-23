@@ -56,10 +56,12 @@ UInt16 YtBuildSearchRequest(const YtClient *clientP, const Char *visitorP,
 /* Splits an https URL into host and the start of its path. */
 Boolean YtSplitUrl(const Char *urlP, Char *hostP, UInt16 hostCapacity,
                    const Char **pathPP);
-/* GET for bytes [start, end] of a stream URL, using its range parameter. */
+/* GET for bytes [start, end] of a stream URL, using its range parameter.
+ * With keepAlive the server may leave the connection open for the next
+ * request. */
 UInt16 YtBuildMediaRequest(const YtClient *clientP, const Char *urlP,
-                           UInt32 start, UInt32 end, Char *requestP,
-                           UInt16 capacity);
+                           UInt32 start, UInt32 end, Boolean keepAlive,
+                           Char *requestP, UInt16 capacity);
 /* Replaces a stream URL with where a redirect sent it, without the range
  * parameter the redirect carries. False, leaving urlP alone, if locationP
  * is not https or does not fit. */
