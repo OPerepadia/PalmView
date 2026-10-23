@@ -98,7 +98,10 @@ def main(prefix, out_dir, root, libs, objects):
                     veneer = f"{name}__far_{tag}"
                     handle.write(
                         f"\t.section .text.{veneer},\"ax\",@progbits\n"
-                        f"\t.hidden {veneer}\n\t.globl {veneer}\n{veneer}:\n"
+                        # 68000 code must start on an even address.
+                        f"\t.balign 2\n"
+                        f"\t.hidden {veneer}\n\t.globl {veneer}\n"
+                        f"\t.type {veneer}, @function\n{veneer}:\n"
                         f"\tlea 1f(%pc), %a0\n\tadda.l #{name}-1f, %a0\n"
                         f"\tjmp (%a0)\n1:\n")
             run(prefix + "as", "-m68000", source, "-o", os.path.join(work, "veneers.o"))

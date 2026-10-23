@@ -13,6 +13,11 @@ CC := $(PREFIX)/bin/m68k-none-elf-gcc
 OBJCOPY := $(PREFIX)/bin/m68k-none-elf-objcopy
 OBJDUMP := $(PREFIX)/bin/m68k-none-elf-objdump
 SIZE := $(PREFIX)/bin/m68k-none-elf-size
+READELF := $(PREFIX)/bin/m68k-none-elf-readelf
+# Fails if a function starts at an odd address: the 68000 cannot run it
+# there, and the Palm resets.
+CHECK_EVEN = $(READELF) -sW $(1) | awk '$$4 == "FUNC" && $$2 ~ /[13579bdfBDF]$$/ \
+	{ print "odd function address: " $$8; odd = 1 } END { exit odd }'
 PILRC := $(PREFIX)/bin/pilrc
 BUILD_PRC := $(PREFIX)/bin/build-prc
 MAGICK ?= $(shell command -v magick 2>/dev/null || command -v convert 2>/dev/null || printf magick)
@@ -158,6 +163,7 @@ $(ELF): $(FAR_DIR)/app.stamp $(BUILD_DIR)/globals.ok src/palm/linker.lkr
 	$(CC) $(ABI_FLAGS) -c $(BUILD_DIR)/reloc_offsets.s -o $(BUILD_DIR)/reloc_offsets.o
 	$(CC) -o $@ $(LDFLAGS) -Wl,--emit-relocs $(FAR_OBJECTS) $(BUILD_DIR)/reloc_offsets.o
 	rm -f $@.stage1
+	@$(call CHECK_EVEN,$@)
 
 $(CODE): $(ELF)
 	$(OBJCOPY) -O binary $< $@ -j .vec -j .text
@@ -204,6 +210,7 @@ $(BENCH_ELF): $(FAR_DIR)/bench.stamp $(BUILD_DIR)/globals.ok src/palm/linker.lkr
 	$(CC) -o $@ $(ABI_FLAGS) $(PROFILE_FLAGS) -nostartfiles -Wl,--gc-sections \
 		-Wl,-T,$(ROOT)/src/palm/linker.lkr -Wl,-Map,$(BENCH_DIR)/bench.map \
 		-Wl,--emit-relocs $(BENCH_FAR_OBJECTS) $(BENCH_DIR)/reloc_offsets.o
+	@$(call CHECK_EVEN,$@)
 	rm -f $@.stage1
 
 $(BENCH_DIR)/code0001.bin: $(BENCH_ELF)

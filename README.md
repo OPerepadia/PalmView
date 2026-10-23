@@ -257,9 +257,10 @@ against ffmpeg's.
 68K code runs PC-relative with a 32 KB reach, and the app is larger than
 that. `tools/m68k-veneers.py` gives each object a small long-call veneer for
 every function it calls in another file, so only a single file must stay
-under 32 KB. The code resource as a whole must stay under 64 KB, so debug
-builds are optimized for size like release builds. Globals are not
-available: keep state on the heap.
+under 32 KB. The 68000 cannot run code at an odd address, so the link fails
+if any function, veneers included, starts at one. The code resource as a
+whole must stay under 64 KB, so debug builds are optimized for size like
+release builds. Globals are not available: keep state on the heap.
 
 ## License
 
