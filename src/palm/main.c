@@ -48,6 +48,9 @@
 /* Level 0 is silent. */
 #define VOLUME_LEVELS 11
 #define VOLUME_DEFAULT 6
+#define RESULT_ROWS 5
+#define RESULT_ROW_HEIGHT 23
+#define NO_RESULT 0xFFFF
 
 /* 3 dB apart; 1024 is unity gain. */
 static const UInt16 kVolumeGain[VOLUME_LEVELS] = {
@@ -85,6 +88,8 @@ typedef struct AppState {
     YtSearch *searchP;
     YtPlayer *playerP;
     UInt16 selected;
+    UInt16 resultTop;           /* result in the first row */
+    UInt16 resultFocus;         /* highlighted result, or NO_RESULT */
 
     JsonScanner scanner;
     Char jsonValue[YT_JSON_VALUE_CAPACITY];
@@ -469,36 +474,206 @@ static Boolean StartApiJob(AppState *s, UInt16 task, UInt16 requestLength)
 
 /* Main form */
 
-static void DrawResultRow(Int16 itemNum, RectangleType *boundsP,
-                          Char **itemsText)
+static void GetResultBounds(RectangleType *boundsP)
 {
-    /* The list's choices pointer carries the YtSearch results. */
-    const YtSearch *searchP = (const YtSearch *)itemsText;
-    const YtSearchItem *itemP = &searchP->items[itemNum];
-    const Char *lengthP = itemP->live ? "live" : itemP->length;
-    UInt16 lengthLength = StrLen(lengthP);
-    Coord lengthWidth = FntCharsWidth(lengthP, lengthLength);
-    Coord titleWidth = boundsP->extent.x - lengthWidth - 6;
-    WinDrawTruncChars(itemP->title, StrLen(itemP->title),
-        boundsP->topLeft.x + 1, boundsP->topLeft.y, titleWidth);
-    WinDrawChars(lengthP, lengthLength,
-        boundsP->topLeft.x + boundsP->extent.x - lengthWidth - 1,
-        boundsP->topLeft.y);
+    FormType *formP = FrmGetActiveForm();
+    FrmGetObjectBounds(formP, FrmGetObjectIndex(formP, ResultGadget), boundsP);
+}
+
+static void AppendDetail(Char *lineP, UInt16 capacity, const Char *textP)
+{
+    if (textP[0] == '\0') return;
+    if (lineP[0] != '\0') Append(lineP, capacity, " \xB7 ");
+    Append(lineP, capacity, textP);
+}
+
+static void AppendShort(Char *lineP, UInt16 capacity, const Char *textP)
+{
+    Char text[20];
+    TextShorten(textP, text, sizeof(text));
+    AppendDetail(lineP, capacity, text);
+}
+
+/* A result in two lines: the title, then "1.8B · 10y ago · Channel".
+ * Drawn in native pixels for a hairline under each result. */
+static void DrawResultRow(const AppState *s, UInt16 row)
+{
+    static const RGBColorType kText = { 0, 0x00, 0x00, 0x00 };
+    static const RGBColorType kDetails = { 0, 0x80, 0x80, 0x80 };
+    static const RGBColorType kLine = { 0, 0xC8, 0xC8, 0xC8 };
+    static const RGBColorType kFocus = { 0, 0xC8, 0xDC, 0xF8 };
+    UInt16 item = s->resultTop + row;
+    const YtSearchItem *itemP = &s->searchP->items[item];
+    RectangleType bounds;
+    UInt16 coordinates;
+    Coord margin, lineHeight, width, bottom;
+    Char line[80];
+    GetResultBounds(&bounds);
+    bounds.topLeft.y += row * RESULT_ROW_HEIGHT;
+    bounds.extent.y = RESULT_ROW_HEIGHT;
+    WinPushDrawState();
+    coordinates = WinSetCoordinateSystem(kCoordinatesNative);
+    WinScaleRectangle(&bounds);
+    WinSetBackColor(UIColorGetTableEntryIndex(UIFormFill));
+    WinEraseRectangle(&bounds, 0);
+    if (item < s->searchP->count) {
+        bottom = bounds.topLeft.y + bounds.extent.y - 1;
+        WinSetForeColorRGB(&kLine, 0);
+        WinDrawLine(bounds.topLeft.x, bottom,
+            bounds.topLeft.x + bounds.extent.x - 1, bottom);
+        bounds.extent.y--;
+        if (item == s->resultFocus) {
+            WinSetBackColorRGB(&kFocus, 0);
+            WinEraseRectangle(&bounds, 0);
+        }
+        line[0] = '\0';
+        if (itemP->live) AppendDetail(line, sizeof(line), "Live");
+        AppendShort(line, sizeof(line), itemP->views);
+        AppendShort(line, sizeof(line), itemP->published);
+        AppendDetail(line, sizeof(line), itemP->channel);
+        FntSetFont(stdFont);
+        lineHeight = FntLineHeight();
+        margin = WinScaleCoord(2, false);
+        width = bounds.extent.x - 2 * margin;
+        bounds.topLeft.x += margin;
+        bounds.topLeft.y += (bounds.extent.y - 2 * lineHeight) / 2;
+        WinSetTextColorRGB(&kText, 0);
+        WinDrawTruncChars(itemP->title, StrLen(itemP->title),
+            bounds.topLeft.x, bounds.topLeft.y, width);
+        WinSetTextColorRGB(&kDetails, 0);
+        WinDrawTruncChars(line, StrLen(line), bounds.topLeft.x,
+            bounds.topLeft.y + lineHeight, width);
+    }
+    WinSetCoordinateSystem(coordinates);
+    WinPopDrawState();
+}
+
+static void DrawResults(const AppState *s)
+{
+    UInt16 row;
+    for (row = 0; row < RESULT_ROWS; row++) DrawResultRow(s, row);
 }
 
 static void ShowResults(AppState *s, Boolean draw)
 {
-    ListType *listP = (ListType *)GetObject(ResultList);
-    LstSetDrawFunction(listP, DrawResultRow);
-    LstSetListChoices(listP, (Char **)s->searchP, (Int16)s->searchP->count);
-    LstSetSelection(listP, noListSelection);
-    if (draw) LstDrawList(listP);
+    UInt16 count = s->searchP->count;
+    UInt16 lastTop = count > RESULT_ROWS ? count - RESULT_ROWS : 0;
+    if (s->resultTop > lastTop) s->resultTop = lastTop;
+    SclSetScrollBar((ScrollBarType *)GetObject(ResultScrollBar),
+        (Int16)s->resultTop, 0, (Int16)lastTop, RESULT_ROWS);
+    if (draw) DrawResults(s);
+}
+
+static void ScrollResults(AppState *s, Int16 rows)
+{
+    Int16 top = (Int16)s->resultTop + rows;
+    s->resultTop = top > 0 ? (UInt16)top : 0;
+    ShowResults(s, true);
+}
+
+/* Highlights item, or nothing with NO_RESULT. */
+static void FocusResult(AppState *s, UInt16 item)
+{
+    UInt16 previous = s->resultFocus;
+    s->resultFocus = item;
+    if (previous - s->resultTop < RESULT_ROWS)
+        DrawResultRow(s, previous - s->resultTop);
+    if (item != previous && item - s->resultTop < RESULT_ROWS)
+        DrawResultRow(s, item - s->resultTop);
+}
+
+/* Moves the highlight by rows, scrolling to keep it in view. */
+static void MoveResultFocus(AppState *s, Int16 rows)
+{
+    UInt16 count = s->searchP->count;
+    Int16 item = (Int16)s->resultFocus + rows;
+    if (count == 0) return;
+    if (s->resultFocus == NO_RESULT) item = (Int16)s->resultTop;
+    if (item < 0) item = 0;
+    if (item >= (Int16)count) item = (Int16)count - 1;
+    if ((UInt16)item < s->resultTop || (UInt16)item >= s->resultTop + RESULT_ROWS) {
+        s->resultFocus = (UInt16)item;
+        s->resultTop = (UInt16)item < s->resultTop
+            ? (UInt16)item : (UInt16)item - RESULT_ROWS + 1;
+        ShowResults(s, true);
+    } else {
+        FocusResult(s, (UInt16)item);
+    }
+}
+
+static void OpenResult(AppState *s, UInt16 item)
+{
+    if (s->task != taskIdle || item >= s->searchP->count) return;
+    if (s->searchP->items[item].live) {
+        SetStatus(s, "Live streams are not supported.");
+        return;
+    }
+    s->selected = item;
+    FrmPopupForm(DetailForm);
+}
+
+/* The result at a screen point, or NO_RESULT */
+static UInt16 ResultAt(const AppState *s, const RectangleType *boundsP,
+                       Coord x, Coord y)
+{
+    UInt16 item;
+    if (!RctPtInRectangle(x, y, boundsP)) return NO_RESULT;
+    item = s->resultTop + (UInt16)(y - boundsP->topLeft.y) / RESULT_ROW_HEIGHT;
+    return item < s->searchP->count ? item : NO_RESULT;
+}
+
+/* Highlights the tapped result while the pen stays on it, and opens it
+ * when the pen lifts there. */
+static void TrackResultPen(AppState *s, Coord x, Coord y)
+{
+    RectangleType bounds;
+    UInt16 previous = s->resultFocus, pressed;
+    Boolean penDown = true, inside = true;
+    GetResultBounds(&bounds);
+    pressed = ResultAt(s, &bounds, x, y);
+    if (pressed == NO_RESULT) return;
+    FocusResult(s, pressed);
+    while (penDown) {
+        EvtGetPen(&x, &y, &penDown);
+        if ((ResultAt(s, &bounds, x, y) == pressed) != inside) {
+            inside = !inside;
+            FocusResult(s, inside ? pressed : previous);
+        }
+    }
+    if (inside) OpenResult(s, pressed);
+}
+
+static Boolean ResultGadgetHandler(FormGadgetTypeInCallback *gadgetP,
+                                   UInt16 cmd, void *paramP)
+{
+    AppState *s = (AppState *)gadgetP->data;
+    if (cmd == formGadgetDrawCmd) {
+        DrawResults(s);
+        return true;
+    }
+    if (cmd == formGadgetEraseCmd) {
+        WinEraseRectangle(&gadgetP->rect, 0);
+        return true;
+    }
+    if (cmd == formGadgetHandleEventCmd &&
+            ((EventType *)paramP)->eType == frmGadgetEnterEvent) {
+        TrackResultPen(s, ((EventType *)paramP)->screenX,
+            ((EventType *)paramP)->screenY);
+        return true;
+    }
+    return false;
 }
 
 static void InitMainForm(AppState *s)
 {
     FieldType *fieldP = (FieldType *)GetObject(SearchField);
     FldSetTextHandle(fieldP, s->searchTextH);
+    {
+        FormType *formP = FrmGetActiveForm();
+        UInt16 index = FrmGetObjectIndex(formP, ResultGadget);
+        FrmSetGadgetData(formP, index, s);
+        FrmSetGadgetHandler(formP, index, ResultGadgetHandler);
+    }
     ShowResults(s, false);
     FldSetTextPtr((FieldType *)GetObject(StatusField), s->status);
     FrmSetFocus(FrmGetActiveForm(), FrmGetObjectIndex(FrmGetActiveForm(),
@@ -543,6 +718,8 @@ static void StartSearch(AppState *s)
     if (s->task != taskIdle || queryP == 0 || queryP[0] == '\0') return;
     RememberSearch(s, queryP);
     YtSearchInit(s->searchP);
+    s->resultTop = 0;
+    s->resultFocus = NO_RESULT;
     ShowResults(s, true);
     JsonScanInit(&s->scanner, s->jsonValue, sizeof(s->jsonValue),
         YtSearchValue, YtSearchEnd, s->searchP);
@@ -1522,18 +1699,6 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
             }
             return true;
         case lstSelectEvent:
-            if (eventP->data.lstSelect.listID == ResultList &&
-                s->task == taskIdle && eventP->data.lstSelect.selection >= 0) {
-                s->selected = (UInt16)eventP->data.lstSelect.selection;
-                if (s->searchP->items[s->selected].live) {
-                    SetStatus(s, "Live streams are not supported.");
-                    LstSetSelection((ListType *)GetObject(ResultList),
-                        noListSelection);
-                } else {
-                    FrmPopupForm(DetailForm);
-                }
-                return true;
-            }
             if (eventP->data.lstSelect.listID == SavedList &&
                 eventP->data.lstSelect.selection >= 0 &&
                 (UInt16)eventP->data.lstSelect.selection < s->savedCount) {
@@ -1618,11 +1783,24 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 StartSearch(s);
                 return true;
             }
-            if (OnForm(MainForm) && (eventP->data.keyDown.chr == vchrPageUp ||
-                    eventP->data.keyDown.chr == vchrPageDown)) {
-                LstScrollList((ListType *)GetObject(ResultList),
-                    eventP->data.keyDown.chr == vchrPageUp ? winUp : winDown, 9);
-                return true;
+            if (OnForm(MainForm)) {
+                WChar c = eventP->data.keyDown.chr;
+                if (c == vchrPageUp || c == vchrRockerUp ||
+                        c == vchrPageDown || c == vchrRockerDown) {
+                    MoveResultFocus(s, c == vchrPageUp || c == vchrRockerUp
+                        ? -1 : 1);
+                    return true;
+                }
+                /* One press may arrive as both of these. */
+                if (c == vchrRockerCenter ||
+                        NavPressed(eventP, navBitSelect, navChangeSelect)) {
+                    UInt32 now = TimGetTicks();
+                    if (now - s->lastCentre >= SysTicksPerSecond() / 4 &&
+                            s->resultFocus != NO_RESULT)
+                        OpenResult(s, s->resultFocus);
+                    s->lastCentre = now;
+                    return true;
+                }
             }
             if (OnForm(PlayForm)) {
                 WChar c = eventP->data.keyDown.chr;
@@ -1662,6 +1840,14 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
             break;
         case sclRepeatEvent:
         case sclExitEvent:
+            if (OnForm(MainForm)) {
+                Int16 to = eventP->eType == sclRepeatEvent
+                    ? eventP->data.sclRepeat.newValue
+                    : eventP->data.sclExit.newValue;
+                ScrollResults(s, to - (Int16)s->resultTop);
+                /* Returning false keeps a held arrow repeating. */
+                return eventP->eType == sclExitEvent;
+            }
             if (OnForm(DetailForm)) {
                 Int16 from = eventP->eType == sclRepeatEvent
                     ? eventP->data.sclRepeat.value : eventP->data.sclExit.value;
@@ -1707,6 +1893,7 @@ static Err StartApplication(AppState *s)
     if (s->searchP == 0 || s->playerP == 0 || s->searchTextH == 0)
         return memErrNotEnoughSpace;
     YtSearchInit(s->searchP);
+    s->resultFocus = NO_RESULT;
     YtPlayerInit(s->playerP, kVideoItags, kAudioItags);
     *(Char *)MemHandleLock(s->searchTextH) = '\0';
     MemHandleUnlock(s->searchTextH);

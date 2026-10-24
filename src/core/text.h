@@ -26,6 +26,11 @@ Boolean TextAppendUInt32(Char *dstP, UInt16 capacity, UInt16 *lengthP,
 /* Parses leading decimal digits. Returns false if there are none. */
 Boolean TextParseUInt32(const Char *textP, UInt32 *valueP);
 
+/* Shortens YouTube's view counts and ages: "1.8B views" becomes "1.8B",
+ * "10 years ago" and "Streamed 10 years ago" become "10y ago". Other text,
+ * such as "No views", is copied as it is. */
+void TextShorten(const Char *srcP, Char *dstP, UInt16 capacity);
+
 /* Makes a FAT-safe ASCII file name from a Palm-encoded title. */
 void TextFileName(const Char *titleP, const Char *fallbackP,
                   const Char *extensionP, Char *dstP, UInt16 capacity);

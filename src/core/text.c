@@ -200,6 +200,35 @@ Boolean TextParseUInt32(const Char *textP, UInt32 *valueP)
     return found;
 }
 
+void TextShorten(const Char *srcP, Char *dstP, UInt16 capacity)
+{
+    static const Char kWords[] = "view\0\0second\0s\0minute\0min\0hour\0h\0"
+        "day\0d\0week\0w\0month\0mo\0year\0y\0";
+    const Char *numberP = srcP;
+    const Char *spaceP, *wordP, *shortP, *restP;
+    UInt16 length = 0, wordLength;
+    dstP[0] = '\0';
+    if (StrNCompare(numberP, "Streamed ", 9) == 0) numberP += 9;
+    spaceP = StrChr(numberP, ' ');
+    if (spaceP != NULL && numberP[0] >= '0' && numberP[0] <= '9') {
+        for (wordP = kWords; *wordP != '\0';
+             wordP = shortP + StrLen(shortP) + 1) {
+            wordLength = StrLen(wordP);
+            shortP = wordP + wordLength + 1;
+            if (StrNCompare(spaceP + 1, wordP, wordLength) != 0) continue;
+            restP = spaceP + 1 + wordLength;
+            if (*restP == 's') restP++;
+            if (*restP != '\0' && *restP != ' ') continue;
+            while (numberP < spaceP && PutChar(dstP, capacity, &length, *numberP))
+                numberP++;
+            TextAppend(dstP, capacity, &length, shortP);
+            TextAppend(dstP, capacity, &length, restP);
+            return;
+        }
+    }
+    TextAppend(dstP, capacity, &length, srcP);
+}
+
 static Boolean FileNameChar(Char c)
 {
     return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||

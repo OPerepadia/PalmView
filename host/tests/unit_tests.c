@@ -74,6 +74,37 @@ static void TestFileName(void)
     ExpectText("file name fallback", out, "VIDEOID.mp4");
 }
 
+static void TestShorten(void)
+{
+    static const char *const kCases[][2] = {
+        { "1.8B views", "1.8B" },
+        { "1 view", "1" },
+        { "No views", "No views" },
+        { "1.2K watching", "1.2K watching" },
+        { "10 years ago", "10y ago" },
+        { "1 year ago", "1y ago" },
+        { "2 months ago", "2mo ago" },
+        { "3 weeks ago", "3w ago" },
+        { "1 day ago", "1d ago" },
+        { "4 hours ago", "4h ago" },
+        { "30 minutes ago", "30min ago" },
+        { "5 seconds ago", "5s ago" },
+        { "Streamed 2 years ago", "2y ago" },
+        { "Premiered 1 day ago", "Premiered 1 day ago" },
+        { "2 decades ago", "2 decades ago" },
+        { "10 yearsago", "10 yearsago" },
+        { "", "" }
+    };
+    Char out[20];
+    UInt16 i;
+    for (i = 0; i < sizeof(kCases) / sizeof(kCases[0]); i++) {
+        TextShorten(kCases[i][0], out, sizeof(out));
+        ExpectText(kCases[i][0], out, kCases[i][1]);
+    }
+    TextShorten("10 years ago", out, 4);
+    ExpectText("shorten truncated", out, "10y");
+}
+
 static void TestClientParse(void)
 {
     YtClient client;
@@ -182,6 +213,7 @@ int main(void)
     TestUtf8ToPalm();
     TestJsonEscape();
     TestFileName();
+    TestShorten();
     TestClientParse();
     TestUrls();
     TestRedirects();

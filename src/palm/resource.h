@@ -4,11 +4,12 @@
 #define MainForm 1000
 #define SearchField 1001
 #define SearchButton 1002
-#define ResultList 1003
+#define ResultGadget 1003
 #define StatusField 1004
 #define SavedButton 1005
 #define HistoryTrigger 1006
 #define HistoryList 1007
+#define ResultScrollBar 1008
 
 #define DetailForm 1100
 #define InfoField 1101

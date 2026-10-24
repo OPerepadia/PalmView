@@ -37,7 +37,9 @@ You need Palm OS 5, Wi-Fi and an SD card. On the TX:
 1. Type a search and tap **Search** (or write a return stroke). The ▼ next
    to the search field lists your last 8 searches; pick one to search again.
    **Options > Clear Search History** forgets them.
-2. Tap a result. PalmView fetches the stream info.
+2. Each result shows its title, then its views, age and channel. Tap a
+   result, or move to it with 5-way up and down and press the centre, and
+   PalmView fetches the stream info.
 3. Tap **Play** to stream it, or **Download** to save it. Download progress
    shows the speed and TLS handshake time.
 4. A downloaded video is saved as `/PalmView/<title>.mp4` on the card. Tap
