@@ -28,6 +28,8 @@ BUILD_DIR := $(ROOT)/build/$(PROFILE)
 HOST_DIR := $(ROOT)/build/host
 ELF := $(BUILD_DIR)/code0001.68k.elf
 CODE := $(BUILD_DIR)/code0001.bin
+CODE2 := $(BUILD_DIR)/code0002.bin
+RELOCS := $(BUILD_DIR)/relocs.bin
 PRC := $(BUILD_DIR)/$(APP_ID).prc
 BASE_RO := $(BUILD_DIR)/$(APP_ID).ro
 RESOURCE_RCP := $(BUILD_DIR)/app.rcp
@@ -158,17 +160,18 @@ $(FAR_DIR)/bench.stamp: $(BENCH_OBJECTS) tools/m68k-veneers.py
 	$(VENEERS) $(FAR_DIR)/bench $(BUILD_DIR) $(BENCH_OBJECTS)
 	@touch $@
 
+RELOCATE = python3 -I tools/m68k-relocs.py $(READELF)
+
 $(ELF): $(FAR_DIR)/app.stamp $(BUILD_DIR)/globals.ok src/palm/linker.lkr
-	$(CC) -o $@.stage1 $(LDFLAGS) -Wl,--emit-relocs $(FAR_OBJECTS)
-	node $(TOOLCHAIN_ROOT)/tools/generate-m68k-relocs.mjs $@.stage1 \
-		$(BUILD_DIR)/reloc_offsets.s $(PREFIX)/bin/m68k-none-elf-readelf
-	$(CC) $(ABI_FLAGS) -c $(BUILD_DIR)/reloc_offsets.s -o $(BUILD_DIR)/reloc_offsets.o
-	$(CC) -o $@ $(LDFLAGS) -Wl,--emit-relocs $(FAR_OBJECTS) $(BUILD_DIR)/reloc_offsets.o
-	rm -f $@.stage1
+	$(CC) -o $@ $(LDFLAGS) -Wl,--emit-relocs $(FAR_OBJECTS)
 	@$(call CHECK_EVEN,$@)
 
 $(CODE): $(ELF)
 	$(OBJCOPY) -O binary $< $@ -j .vec -j .text
+$(CODE2): $(ELF)
+	$(OBJCOPY) -O binary $< $@ -j .text2
+$(RELOCS): $(ELF) tools/m68k-relocs.py
+	$(RELOCATE) $< $@
 
 # Launcher icons are 32x22, and 64x44 for high-density screens. Palm bitmaps
 # have one transparent color and no partial transparency. Pixels that are
@@ -185,7 +188,7 @@ $(BUILD_DIR)/icon-color.bmp: src/palm/icon.svg | $(BUILD_DIR)
 $(BUILD_DIR)/icon-color-hd.bmp: src/palm/icon.svg | $(BUILD_DIR)
 	$(MAGICK) -background none -density 192 RSVG:$< $(ICON_EDGE) BMP3:$@
 
-$(PRC): $(CODE) $(ICONS) \
+$(PRC): $(CODE) $(CODE2) $(RELOCS) $(ICONS) \
 		$(RESOURCE_RCP) src/palm/resource.h certs/google.pem app.mk
 	cd $(BUILD_DIR) && $(PILRC) -ro -o $(BASE_RO) -creator $(APP_CREATOR) \
 		-type $(APP_TYPE) -name '$(APP_NAME)' -I $(ROOT)/src/palm $(RESOURCE_RCP)
@@ -204,21 +207,17 @@ $(BENCH_DIR)/app.rcp: src/bench/bench.rcp $(ARM_RCP) app.mk | $(BUILD_DIR)/bench
 	sed 's#"\(arm[a-z]*[0-9]*\.bin\)"#"$(ARM_DIR)/res/\1"#' $(ARM_RCP) >> $@
 
 $(BENCH_ELF): $(FAR_DIR)/bench.stamp $(BUILD_DIR)/globals.ok src/palm/linker.lkr
-	$(CC) -o $@.stage1 $(ABI_FLAGS) $(PROFILE_FLAGS) -nostartfiles -Wl,--gc-sections \
-		-Wl,-T,$(ROOT)/src/palm/linker.lkr -Wl,--emit-relocs $(BENCH_FAR_OBJECTS)
-	node $(TOOLCHAIN_ROOT)/tools/generate-m68k-relocs.mjs $@.stage1 \
-		$(BENCH_DIR)/reloc_offsets.s $(PREFIX)/bin/m68k-none-elf-readelf
-	$(CC) $(ABI_FLAGS) -c $(BENCH_DIR)/reloc_offsets.s -o $(BENCH_DIR)/reloc_offsets.o
 	$(CC) -o $@ $(ABI_FLAGS) $(PROFILE_FLAGS) -nostartfiles -Wl,--gc-sections \
 		-Wl,-T,$(ROOT)/src/palm/linker.lkr -Wl,-Map,$(BENCH_DIR)/bench.map \
-		-Wl,--emit-relocs $(BENCH_FAR_OBJECTS) $(BENCH_DIR)/reloc_offsets.o
+		-Wl,--emit-relocs $(BENCH_FAR_OBJECTS)
 	@$(call CHECK_EVEN,$@)
-	rm -f $@.stage1
 
 $(BENCH_DIR)/code0001.bin: $(BENCH_ELF)
 	$(OBJCOPY) -O binary $< $@ -j .vec -j .text
+$(BENCH_DIR)/relocs.bin: $(BENCH_ELF) tools/m68k-relocs.py
+	$(RELOCATE) $< $@
 
-$(BENCH_PRC): $(BENCH_DIR)/code0001.bin $(ICONS) \
+$(BENCH_PRC): $(BENCH_DIR)/code0001.bin $(BENCH_DIR)/relocs.bin $(ICONS) \
 		$(BENCH_DIR)/app.rcp src/bench/resource.h
 	cp $(ICONS) $(BENCH_DIR)/
 	cd $(BENCH_DIR) && $(PILRC) -q -ro -o $(BENCH_DIR)/$(BENCH_ID).ro -creator $(BENCH_CREATOR) \

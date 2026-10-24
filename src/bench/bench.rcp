@@ -1,6 +1,7 @@
 #include "resource.h"
 
 DATA "code" ID 1 "code0001.bin"
+DATA "Rloc" ID 1 "relocs.bin"
 // SysAppPrefsType: priority 30, 32 KiB stack, 4 KiB minimum free heap.
 HEX "pref" ID 0 0x00 0x1e 0x00 0x00 0x80 0x00 0x00 0x00 0x10 0x00
 

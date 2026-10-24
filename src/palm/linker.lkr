@@ -1,16 +1,16 @@
 /* Based on PalmTLS apps/tls-tester/toolchain/linker.lkr.
  *
- * The 68000 reaches calls and data PC-relatively within +/-32 KB, and this
- * app's code is larger than that. Calls between files go through veneers
+ * The code is split into two resources, code 1 and code 2, each under
+ * 65000 bytes. Whole files go into one segment: a file reaches its own
+ * strings and tables PC-relatively. Calls between files go through veneers
  * (tools/m68k-veneers.py), so only each file must stay under 32 KB. The
- * runtime relocation table sits next to the startup code that reads it,
- * with a fixed size so both link stages place code identically. */
-
-RELOC_TABLE_SIZE = 512;
+ * startup code relocates absolute addresses using the table that
+ * tools/m68k-relocs.py builds from this link. */
 
 MEMORY
 {
     main : ORIGIN = 0x10000000, LENGTH = 65000
+    main2 : ORIGIN = 0x20000000, LENGTH = 65000
     trash : ORIGIN = 0x40000000, LENGTH = 64K
 }
 
@@ -18,12 +18,13 @@ SECTIONS
 {
     .macsbug_discard : { *(.text.*.macsbug) } > trash
     .vec : { KEEP(*(.vectors)) *(.vectors) } > main
-    .text : {
+    .text2 : {
+        *mp4_merge.o(.text .text.* .rodata .rodata.*)
+        *yt_api.o(.text .text.* .rodata .rodata.*)
+        *json_scan.o(.text .text.* .rodata .rodata.*)
         . = ALIGN(4);
-        __reloc_offsets_start = ABSOLUTE(.);
-        KEEP(*(.reloc_offsets))
-        __reloc_offsets_end = ABSOLUTE(.);
-        . += RELOC_TABLE_SIZE - (__reloc_offsets_end - __reloc_offsets_start);
+    } > main2
+    .text : {
         *startup.o(.text .text.* .rodata .rodata.*)
         *(.text .text.* .rodata .rodata.*)
         . = ALIGN(4);
@@ -31,8 +32,5 @@ SECTIONS
     .trash2 : { *(.init) *(.init.*) *(.fini) *(.fini.*) *(*.macsbug) } > trash
     /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) *(.data*) *(.bss*) *(COMMON) }
 }
-
-ASSERT(__reloc_offsets_end - __reloc_offsets_start <= RELOC_TABLE_SIZE,
-       "Too many runtime relocations: raise RELOC_TABLE_SIZE in linker.lkr")
 
 ENTRY(__Startup__)

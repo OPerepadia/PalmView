@@ -328,12 +328,18 @@ against ffmpeg's.
   trusts. Refresh with `tools/update-certs.sh`.
 
 68K code runs PC-relative with a 32 KB reach, and the app is larger than
-that. `tools/m68k-veneers.py` gives each object a small long-call veneer for
-every function it calls in another file, so only a single file must stay
-under 32 KB. The 68000 cannot run code at an odd address, so the link fails
-if any function, veneers included, starts at one. The code resource as a
-whole must stay under 64 KB, so debug builds are optimized for size like
-release builds. Globals are not available: keep state on the heap.
+that. `tools/m68k-veneers.py` gives each object a small veneer, an absolute
+jump, for every function it calls in another file. So only a single file
+must stay under 32 KB. The 68000 cannot run code at an odd address, so the
+link fails if any function, veneers included, starts at one.
+
+Each code resource must stay under 65,000 bytes, so the code is split in
+two. `src/palm/linker.lkr` lists the files that go into code 2; everything
+else goes into code 1. A file's code always stays in one resource. At each
+launch, the startup code locks code 2 and fixes up the absolute addresses
+in both resources. It uses the table that `tools/m68k-relocs.py` builds
+(the `Rloc` resource). Debug builds are optimized for size like release
+builds. Globals are not available: keep state on the heap.
 
 ## License
 

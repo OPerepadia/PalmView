@@ -3,19 +3,18 @@
 """Gives each 68K object its own long-call veneers.
 
 68000 code built with -mpcrel calls other functions PC-relatively, which
-reaches only +/-32 KB. The app is larger than that, so a call from one
-object to a function in another may not reach. For every function an
-object calls outside itself (including libgcc and libc helpers), this adds
-a 12-byte veneer to that object, and points the object's calls at it:
+reaches only +/-32 KB. The app is larger than that, and its code is split
+across resources, so a call from one object to a function in another may
+not reach. For every function an object calls outside itself (including
+libgcc and libc helpers), this adds a 6-byte veneer to that object, and
+points the object's calls at it:
 
-    lea     1f(%pc), %a0
-    adda.l  #target-1f, %a0     | 32-bit PC-relative: reaches anything
-    jmp     (%a0)               | a0 is a scratch register in the ABI
-  1:
+    jmp     target              | absolute: relocated at startup
 
 The veneer sits in the same object as its callers, so they always reach it.
-Nothing is patched at run time. Only functions get veneers: those defined
-in the objects, and those in the --lib archives (libgcc, libc). Anything
+The startup code relocates the absolute address, so code must not call
+another object before that. Only functions get veneers: those defined in
+the objects, and those in the --lib archives (libgcc, libc). Anything
 else, such as linker script symbols, is left alone.
 
   m68k-veneers.py TOOL_PREFIX OUT_DIR ROOT [--lib LIB.a]... OBJECT...
@@ -102,8 +101,7 @@ def main(prefix, out_dir, root, libs, objects):
                         f"\t.balign 2\n"
                         f"\t.hidden {veneer}\n\t.globl {veneer}\n"
                         f"\t.type {veneer}, @function\n{veneer}:\n"
-                        f"\tlea 1f(%pc), %a0\n\tadda.l #{name}-1f, %a0\n"
-                        f"\tjmp (%a0)\n1:\n")
+                        f"\tjmp {name}\n")
             run(prefix + "as", "-m68000", source, "-o", os.path.join(work, "veneers.o"))
             renamed = os.path.join(work, "renamed.o")
             run(prefix + "objcopy",
