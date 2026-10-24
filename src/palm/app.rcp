@@ -53,6 +53,7 @@ BEGIN
     GADGET ID PlaySeekGadget AT (2 106 156 5)
     FIELD ID PlayStatusField AT (2 111 156 33) NONEDITABLE MULTIPLELINES MAXCHARS 127
     BUTTON "Pause" ID PlayPauseButton AT (2 145 40 12)
+    GADGET ID PlayVolumeGadget AT (55 147 50 9)
     BUTTON "Done" ID PlayDoneButton AT (118 145 40 12)
 END
 

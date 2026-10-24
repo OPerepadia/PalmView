@@ -137,6 +137,7 @@ typedef struct AppState {
     UInt32 lastCentre;          /* ticks of the last 5-way centre press */
     UInt32 lastSkip;            /* and of the last left or right one */
     Boolean seekDragging;       /* the pen is on the seek bar */
+    Boolean volumeDragging;     /* or on the volume bars */
     Boolean skipPending;        /* 5-way presses not applied yet */
     UInt32 seekTargetMs;        /* where either points */
     Char *historyItems[HISTORY_MAX];    /* the history list's choices */
@@ -1243,13 +1244,21 @@ static Coord BarX(UInt32 value, UInt32 total, Coord width)
     return (Coord)(value * (UInt32)width / total);
 }
 
-static void FillBar(RectangleType *rP, Coord width, UInt8 gray, UInt8 red)
+static void FillBar(RectangleType *rP, Coord width, UInt8 gray)
 {
     RGBColorType color;
-    color.r = red;
+    color.r = gray;
     color.g = gray;
     color.b = gray;
     WinSetForeColorRGB(&color, 0);
+    rP->extent.x = width;
+    WinDrawRectangle(rP, 0);
+}
+
+/* In the color theme's title bar color */
+static void FillThemeBar(RectangleType *rP, Coord width)
+{
+    WinSetForeColor(UIColorGetTableEntryIndex(UIFormFrame));
     rP->extent.x = width;
     WinDrawRectangle(rP, 0);
 }
@@ -1277,11 +1286,11 @@ static void DrawSeekBar(const AppState *s)
     played = BarX(position, duration, bounds.extent.x - 4);
     WinPushDrawState();
     RctSetRectangle(&bar, bounds.topLeft.x, bounds.topLeft.y + 2, 0, 2);
-    FillBar(&bar, bounds.extent.x, 0xC8, 0xC8);
-    FillBar(&bar, BarX(loaded, duration, bounds.extent.x), 0x80, 0x80);
-    FillBar(&bar, played, 0x00, 0xCC);
+    FillBar(&bar, bounds.extent.x, 0xC8);
+    FillBar(&bar, BarX(loaded, duration, bounds.extent.x), 0x80);
+    FillThemeBar(&bar, played);
     RctSetRectangle(&bar, bounds.topLeft.x + played, bounds.topLeft.y + 1, 0, 4);
-    FillBar(&bar, 4, 0x00, 0xCC);
+    FillThemeBar(&bar, 4);
     WinPopDrawState();
 }
 
@@ -1297,6 +1306,38 @@ static UInt32 SeekBarMs(const AppState *s, Coord penX)
     return ms < duration ? ms : duration;
 }
 
+static void GetVolumeBounds(RectangleType *boundsP)
+{
+    FormType *formP = FrmGetActiveForm();
+    FrmGetObjectBounds(formP, FrmGetObjectIndex(formP, PlayVolumeGadget), boundsP);
+}
+
+/* Ten bars rising left to right; the colored ones show the volume. */
+static void DrawVolume(const AppState *s)
+{
+    RectangleType bounds, bar;
+    UInt16 coordinates, level;
+    Coord step, shortest;
+    if (!OnForm(PlayForm)) return;
+    GetVolumeBounds(&bounds);
+    WinPushDrawState();
+    coordinates = WinSetCoordinateSystem(kCoordinatesNative);
+    WinScaleRectangle(&bounds);
+    WinEraseRectangle(&bounds, 0);
+    step = bounds.extent.x / (VOLUME_LEVELS - 1);
+    shortest = bounds.extent.y / 4;
+    for (level = 1; level < VOLUME_LEVELS; level++) {
+        bar.extent.y = shortest + (bounds.extent.y - shortest) * (level - 1) /
+            (VOLUME_LEVELS - 2);
+        bar.topLeft.x = bounds.topLeft.x + (level - 1) * step;
+        bar.topLeft.y = bounds.topLeft.y + bounds.extent.y - bar.extent.y;
+        if (level <= s->prefs.volume) FillThemeBar(&bar, step * 2 / 3);
+        else FillBar(&bar, step * 2 / 3, 0xC8);
+    }
+    WinSetCoordinateSystem(coordinates);
+    WinPopDrawState();
+}
+
 static void SetVolume(AppState *s, UInt16 level)
 {
     if (level == s->prefs.volume) return;
@@ -1304,6 +1345,32 @@ static void SetVolume(AppState *s, UInt16 level)
     s->prefsChanged = true;
     if (s->playbackP != 0)
         PlaybackSetVolume(s->playbackP, kVolumeGain[level]);
+    DrawVolume(s);
+}
+
+/* Sets the volume to the bar under the pen. Left of the bars mutes. */
+static Boolean TrackVolume(AppState *s, const EventType *eventP)
+{
+    RectangleType bounds;
+    Coord step;
+    UInt16 level;
+    GetVolumeBounds(&bounds);
+    if (eventP->eType == penDownEvent) {
+        /* Take the whole height of the button row. */
+        bounds.topLeft.y -= 2;
+        bounds.extent.y += 3;
+        if (!RctPtInRectangle(eventP->screenX, eventP->screenY, &bounds))
+            return false;
+        s->volumeDragging = true;
+    } else if (!s->volumeDragging) {
+        return false;
+    }
+    if (eventP->eType == penUpEvent) s->volumeDragging = false;
+    step = bounds.extent.x / (VOLUME_LEVELS - 1);
+    if (eventP->screenX < bounds.topLeft.x) level = 0;
+    else level = (UInt16)((eventP->screenX - bounds.topLeft.x) / step) + 1;
+    SetVolume(s, level < VOLUME_LEVELS ? level : VOLUME_LEVELS - 1);
+    return true;
 }
 
 static void UpdatePlayStatus(AppState *s)
@@ -1432,9 +1499,11 @@ static void OpenPlayForm(AppState *s)
     StrCopy(s->playStatus, s->playPath[0] != '\0' ? "Loading..." : "Connecting...");
     FldSetTextPtr((FieldType *)GetObject(PlayStatusField), s->playStatus);
     s->seekDragging = false;
+    s->volumeDragging = false;
     s->skipPending = false;
     FrmDrawForm(formP);
     ClearVideoArea();
+    DrawVolume(s);
 
     errorP = StartPlayback(s);
     if (errorP == 0) {
@@ -1708,6 +1777,7 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
             if (OnForm(PlayForm)) {
                 ClearVideoArea();
                 DrawSeekBar(s);
+                DrawVolume(s);
             }
             return true;
         case lstSelectEvent:
@@ -1759,13 +1829,15 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
             break;
         case penMoveEvent:
         case penUpEvent:
-            if (OnForm(PlayForm) && s->playbackP != 0 && TrackSeekBar(s, eventP))
+            if (OnForm(PlayForm) && s->playbackP != 0 &&
+                    (TrackSeekBar(s, eventP) || TrackVolume(s, eventP)))
                 return true;
             break;
         case penDownEvent:
             if (OnForm(PlayForm) && s->playbackP != 0) {
                 RectangleType bounds;
-                if (TrackSeekBar(s, eventP)) return true;
+                if (TrackSeekBar(s, eventP) || TrackVolume(s, eventP))
+                    return true;
                 GetVideoBounds(&bounds);
                 if (RctPtInRectangle(eventP->screenX, eventP->screenY, &bounds)) {
                     TogglePause(s);
