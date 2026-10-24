@@ -33,7 +33,6 @@
 
 #define PlayForm 1500
 #define PlayVideoGadget 1501
-#define PlayTitleField 1502
 #define PlayStatusField 1503
 #define PlayPauseButton 1504
 #define PlayDoneButton 1505

@@ -50,6 +50,8 @@
 #define VOLUME_DEFAULT 6
 #define RESULT_ROWS 5
 #define RESULT_ROW_HEIGHT 23
+/* Leaves room for the title's tab around the text. */
+#define PLAY_TITLE_WIDTH 150
 #define NO_RESULT 0xFFFF
 
 /* 3 dB apart; 1024 is unity gain. */
@@ -1406,6 +1408,7 @@ static void OpenPlayForm(AppState *s)
     RectangleType bounds, formBounds;
     const Char *nameP = s->playPath, *p, *errorP;
     UInt16 length;
+    FontID font;
     for (p = s->playPath; *p != '\0'; p++)
         if (*p == '/') nameP = p + 1;
     if (s->playPath[0] == '\0')
@@ -1416,8 +1419,17 @@ static void OpenPlayForm(AppState *s)
     if (length >= sizeof(s->playTitle)) length = sizeof(s->playTitle) - 1;
     MemMove(s->playTitle, nameP, length);
     s->playTitle[length] = '\0';
+    font = FntSetFont(boldFont);
+    if (FntCharsWidth(s->playTitle, (Int16)length) > PLAY_TITLE_WIDTH) {
+        while (length > 0 && FntCharsWidth(s->playTitle, (Int16)length) +
+                FntCharWidth(chrEllipsis) > PLAY_TITLE_WIDTH)
+            length--;
+        s->playTitle[length++] = chrEllipsis;
+        s->playTitle[length] = '\0';
+    }
+    FntSetFont(font);
+    FrmSetTitle(formP, s->playTitle);
     StrCopy(s->playStatus, s->playPath[0] != '\0' ? "Loading..." : "Connecting...");
-    FldSetTextPtr((FieldType *)GetObject(PlayTitleField), s->playTitle);
     FldSetTextPtr((FieldType *)GetObject(PlayStatusField), s->playStatus);
     s->seekDragging = false;
     s->skipPending = false;
