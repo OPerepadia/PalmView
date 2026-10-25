@@ -1165,10 +1165,13 @@ static void StartPlayer(AppState *s)
     BuildInfo(s);
     JsonScanInit(&s->scanner, s->jsonValue, sizeof(s->jsonValue),
         YtPlayerValue, YtPlayerEnd, s->playerP);
-    StrCopy(s->progress, "Getting stream info...");
-    StartApiJob(s, taskPlayer, YtBuildPlayerRequest(&s->client,
-        s->prefs.visitor, itemP->videoId, s->body, s->request,
-        sizeof(s->request)));
+    s->progress[0] = '\0';
+    /* Where the stream sizes will be; FinishPlayer builds the info again. */
+    Append(s->info, sizeof(s->info), "\nGetting stream info...");
+    if (!StartApiJob(s, taskPlayer, YtBuildPlayerRequest(&s->client,
+            s->prefs.visitor, itemP->videoId, s->body, s->request,
+            sizeof(s->request))))
+        BuildInfo(s);
 }
 
 static void FinishPlayer(AppState *s)
