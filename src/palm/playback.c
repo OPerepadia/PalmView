@@ -13,6 +13,14 @@
 #define ARENA_LIMIT (1792UL * 1024)
 #define ARENA_MINIMUM (1152UL * 1024)
 #define QUEUE_DEPTH 3
+/* Frames bigger than 144p are large. 240p peaks near 2.07 MB with two
+ * queued frames, at the lowest level, which is all a Palm TX keeps up
+ * with. Large video takes the largest chunk less LARGE_RESERVE, and the
+ * rest of LARGE_HEAP from another chunk. */
+#define LARGE_PIXELS (256UL * 144UL)
+#define LARGE_HEAP (2304UL * 1024)
+#define LARGE_RESERVE (64UL * 1024)
+#define LARGE_QUEUE_DEPTH 2
 
 /* 0.74 s at 44.1 kHz, enough to cover a slow keyframe; half that if memory
  * is short. The callback asks for SOUND_BUFFER_FRAMES at a time; one AAC
@@ -300,19 +308,74 @@ static void FollowSound(Playback *p)
 
 /* Decoders */
 
+/* The decoder's heap: the largest free chunk, less a reserve. large: the
+ * video will need LARGE_HEAP. */
+static const Char *AllocateArena(Playback *p, Boolean large)
+{
+    UInt32 freeBytes = 0, maxChunk = 0, arenaSize;
+    UInt32 reserve = large ? LARGE_RESERVE : HEAP_RESERVE;
+    UInt32 limit = large ? LARGE_HEAP : ARENA_LIMIT;
+    MemHeapFreeBytes(0, &freeBytes, &maxChunk);
+    p->heapFree = freeBytes;
+    p->heapChunk = maxChunk;
+    arenaSize = maxChunk > reserve ? maxChunk - reserve : 0;
+    if (arenaSize > limit) arenaSize = limit;
+    if (arenaSize < ARENA_MINIMUM)
+        return "Not enough free memory. Close other apps and try again.";
+    p->arenaP = (UInt8 *)ArmLargeAlloc(arenaSize);
+    if (p->arenaP == 0) return "Not enough free memory.";
+    p->arenaSize = arenaSize;
+    if (Call(p, armCmdInit, (UInt32)p->arenaP, arenaSize,
+            (UInt32)p->module.stackP, ARM_STACK_SIZE) != 0 ||
+        p->module.callP->out[0] != ARM_MODULE_VERSION)
+        return "The decoder did not start.";
+    return 0;
+}
+
+/* Brings the decoder's heap up to LARGE_HEAP with a block from another
+ * chunk. A saved file is only known to be large once the arena is made:
+ * while the heap is still empty, the arena is made again, larger. */
+static const Char *AddLargeHeap(Playback *p)
+{
+    const Char *errorP;
+    if (p->extraP != 0 || p->arenaSize >= LARGE_HEAP) return 0;
+    p->extraP = (UInt8 *)ArmLargeAlloc(LARGE_HEAP - p->arenaSize);
+    if (p->extraP == 0 && !p->decoderOpen && !p->ringOpen) {
+        MemPtrFree(p->arenaP);
+        p->arenaP = 0;
+        errorP = AllocateArena(p, true);
+        if (errorP != 0) return errorP;
+        if (p->arenaSize >= LARGE_HEAP) return 0;
+        p->extraP = (UInt8 *)ArmLargeAlloc(LARGE_HEAP - p->arenaSize);
+    }
+    if (p->extraP == 0) return "Not enough free memory for this video.";
+    p->extraSize = LARGE_HEAP - p->arenaSize;
+    Call(p, armCmdHeapAdd, (UInt32)p->extraP, p->extraSize, 0, 0);
+    return 0;
+}
+
 /* Streams fill in the reader's tracks themselves. */
 static const Char *StartDecoders(Playback *p)
 {
     Mp4ReadTrack *t = &p->readerP->video;
+    const Char *errorP;
     if (p->feedP == 0 &&
         Mp4ReaderOpen(p->readerP, StoreMp4Read, (void *)p->file, p->fileSize) !=
             mp4MergeOk)
         return "This is not an MP4 file PalmView can read.";
     if (!t->present || t->configLength == 0 || t->timescale == 0)
         return "The file has no H.264 video.";
+    p->large = (UInt32)t->width * t->height > LARGE_PIXELS;
+    if (p->large) {
+        errorP = AddLargeHeap(p);
+        if (errorP != 0) return errorP;
+    }
+    p->queueDepth = p->large ? LARGE_QUEUE_DEPTH : QUEUE_DEPTH;
+    p->bestLevel = p->large ? PLAYBACK_LEVELS - 1 : 0;
+    if (p->level < p->bestLevel) p->level = p->bestLevel;
     MemMove(p->sampleP, t->config, t->configLength);
     if (Call(p, armCmdVideoOpen, (UInt32)p->sampleP, t->configLength,
-            QUEUE_DEPTH, 0) != 0)
+            p->queueDepth, 0) != 0)
         return "The video decoder did not start.";
     p->decoderOpen = true;
     p->timescale = t->timescale;
@@ -340,7 +403,7 @@ static const Char *StartDecoders(Playback *p)
 /* A seek keeps the level: the video is the same. */
 static void ResetLevel(Playback *p)
 {
-    p->level = 0;
+    p->level = p->bestLevel;
     p->calmWindows = 0;
     p->calmNeeded = CALM_WINDOWS;
     p->strained = false;
@@ -356,30 +419,19 @@ static void StopDecoders(Playback *p)
     p->ringOpen = false;
 }
 
-static const Char *LoadDecoder(Playback *p)
+/* large: the stream will need LARGE_HEAP, from the start. */
+static const Char *LoadDecoder(Playback *p, Boolean large)
 {
-    UInt32 freeBytes = 0, maxChunk = 0, arenaSize;
+    const Char *errorP;
     p->readerP = (Mp4Reader *)MemPtrNew(sizeof(Mp4Reader));
     p->sampleP = (UInt8 *)ArmLargeAlloc(SAMPLE_CAPACITY);
     if (p->readerP == 0 || p->sampleP == 0) return "Out of memory.";
     MemSet(p->readerP, sizeof(Mp4Reader), 0);
     if (ArmModuleLoad(&p->module) != errNone) return "Could not load the decoder.";
     p->moduleLoaded = true;
-    MemHeapFreeBytes(0, &freeBytes, &maxChunk);
-    p->heapFree = freeBytes;
-    p->heapChunk = maxChunk;
-    arenaSize = maxChunk > HEAP_RESERVE ? maxChunk - HEAP_RESERVE : 0;
-    if (arenaSize > ARENA_LIMIT) arenaSize = ARENA_LIMIT;
-    if (arenaSize < ARENA_MINIMUM)
-        return "Not enough free memory. Close other apps and try again.";
-    p->arenaP = (UInt8 *)ArmLargeAlloc(arenaSize);
-    if (p->arenaP == 0) return "Not enough free memory.";
-    p->arenaSize = arenaSize;
-    if (Call(p, armCmdInit, (UInt32)p->arenaP, arenaSize,
-            (UInt32)p->module.stackP, ARM_STACK_SIZE) != 0 ||
-        p->module.callP->out[0] != ARM_MODULE_VERSION)
-        return "The decoder did not start.";
-    return 0;
+    errorP = AllocateArena(p, large);
+    if (errorP != 0) return errorP;
+    return large ? AddLargeHeap(p) : 0;
 }
 
 const Char *PlaybackOpen(Playback *p, const Char *pathP)
@@ -390,12 +442,15 @@ const Char *PlaybackOpen(Playback *p, const Char *pathP)
     if (StoreOpenRead(p->volume, pathP, &p->file, &p->fileSize) != errNone)
         return "Could not open the file.";
     p->fileOpen = true;
-    errorP = LoadDecoder(p);
+    errorP = LoadDecoder(p, false);
     ResetLevel(p);
     return errorP != 0 ? errorP : StartDecoders(p);
 }
 
 /* Streams */
+
+static UInt16 FindSegment(const Playback *p, UInt32 ms);
+static UInt32 SeekSegment(Playback *p, UInt16 video);
 
 static void OpenStreams(Playback *p)
 {
@@ -415,7 +470,7 @@ static void OpenStreams(Playback *p)
     p->audioFrom = 0;
     ResetLevel(p);
     StreamFeedStart(p->feedP, &p->streams[STREAM_FEED_VIDEO],
-        &p->streams[STREAM_FEED_AUDIO]);
+        &p->streams[STREAM_FEED_AUDIO], p->startMs != 0);
 }
 
 /* Shares the memory left between the two rings, by bitrate. */
@@ -443,12 +498,15 @@ static const Char *AllocateRings(Playback *p)
     return 0;
 }
 
-const Char *PlaybackOpenStream(Playback *p, struct StreamFeed *feedP)
+const Char *PlaybackOpenStream(Playback *p, struct StreamFeed *feedP,
+                               Boolean large, UInt32 startMs)
 {
     const Char *errorP;
     MemSet(p, sizeof(*p), 0);
     p->feedP = feedP;
-    errorP = LoadDecoder(p);
+    p->startMs = startMs;
+    p->pausedMs = startMs;
+    errorP = LoadDecoder(p, large);
     if (errorP == 0) errorP = AllocateRings(p);
     if (errorP == 0) OpenStreams(p);
     return errorP != 0 ? errorP : p->errorP;
@@ -500,6 +558,7 @@ void PlaybackClose(Playback *p)
         ArmModuleUnload(&p->module);
     }
     if (p->arenaP != 0) MemPtrFree(p->arenaP);
+    if (p->extraP != 0) MemPtrFree(p->extraP);
     if (p->fileOpen) VFSFileClose(p->file);
     if (p->readerP != 0) MemPtrFree(p->readerP);
     if (p->sampleP != 0) MemPtrFree(p->sampleP);
@@ -668,7 +727,8 @@ static void EndWindow(Playback *p)
             p->calmNeeded *= 2;
         p->level++;
         p->calmWindows = 0;
-    } else if (!late && p->cpuPercent < CALM_CPU_PERCENT && p->level > 0) {
+    } else if (!late && p->cpuPercent < CALM_CPU_PERCENT &&
+               p->level > p->bestLevel) {
         if (++p->calmWindows >= p->calmNeeded) {
             p->level--;
             p->lastLevelDown = now;
@@ -731,9 +791,11 @@ static Boolean ReadyToStart(Playback *p)
     if (p->soundOn && !p->soundInputEnded && p->soundBuffered < SOUND_PREFILL_FRAMES)
         return false;
     p->started = true;
-    /* A seek starts later in the same timeline. */
+    /* A seek starts later in the same timeline. A stream that started
+     * partway in counts back from its first frame. */
     if (!p->firstPtsKnown) {
-        p->firstPts = p->frontPts;
+        UInt32 back = MsToScale(p->seekMs, p->timescale);
+        p->firstPts = p->frontPts > back ? p->frontPts - back : 0;
         p->firstPtsKnown = true;
     }
     p->peakNet = 0;
@@ -763,6 +825,24 @@ static void ResetWindow(Playback *p)
     if (p->feedP != 0) p->windowReceived = StreamFeedReceived(p->feedP);
 }
 
+/* Streams starting partway in: once both indexes are in, both move to
+ * the segment holding startMs. Without them, playback starts at 0. */
+static void StartLater(Playback *p)
+{
+    Mp4Stream *videoP = &p->streams[STREAM_FEED_VIDEO];
+    Mp4Stream *audioP = &p->streams[STREAM_FEED_AUDIO];
+    Boolean videoIndexed = Mp4StreamIndexed(videoP);
+    Boolean audioIndexed = Mp4StreamIndexed(audioP);
+    if ((!videoIndexed || !audioIndexed) && !StreamFeedHeld(p->feedP)) return;
+    if (videoIndexed && audioIndexed && videoP->status == mp4MergeOk &&
+        audioP->status == mp4MergeOk && videoP->segmentCount != 0 &&
+        audioP->segmentCount != 0)
+        SeekSegment(p, FindSegment(p, p->startMs));
+    else
+        StreamFeedSeek(p->feedP, videoP->writeOffset, audioP->writeOffset);
+    p->startMs = 0;
+}
+
 /* Streams: the decoders start once both moov boxes and the first seconds
  * are in. */
 static Boolean StreamsStarted(Playback *p)
@@ -776,6 +856,10 @@ static Boolean StreamsStarted(Playback *p)
         if (p->streams[STREAM_FEED_VIDEO].status != mp4MergeOk ||
             p->streams[STREAM_FEED_AUDIO].status != mp4MergeOk)
             p->errorP = "The stream could not be read.";
+        return false;
+    }
+    if (p->startMs != 0) {
+        StartLater(p);
         return false;
     }
     if (!StreamsBuffered(p, START_BUFFER_MS)) return false;
@@ -848,7 +932,7 @@ static Int32 StepOnce(Playback *p)
     }
     if (p->feedP != 0 && Buffering(p)) {
         /* Decode ahead while the clock waits. */
-        if (p->queued < QUEUE_DEPTH && !p->inputEnded) {
+        if (p->queued < p->queueDepth && !p->inputEnded) {
             DecodeOne(p);
             if (!p->videoWaiting) return 0;
         }
@@ -876,7 +960,7 @@ static Int32 StepOnce(Playback *p)
         return 0;
     }
     /* Decode ahead while there is time before the next frame is due. */
-    if (p->queued < QUEUE_DEPTH && !p->inputEnded && dueMs - nowMs > p->decodeMs) {
+    if (p->queued < p->queueDepth && !p->inputEnded && dueMs - nowMs > p->decodeMs) {
         DecodeOne(p);
         if (!p->videoWaiting) return 0;
     }

@@ -20,20 +20,25 @@
 typedef struct StreamFeed StreamFeed;
 
 /* The formats must stay valid while the feed exists. Redirects rewrite
- * their URLs. Returns 0 if out of memory. */
+ * their URLs. seconds, the video's length, sets how fast to read; 0 if
+ * unknown. Returns 0 if out of memory. */
 StreamFeed *StreamFeedNew(const NetJobConfig *configP, const YtClient *clientP,
-                          YtFormat *videoP, YtFormat *audioP);
+                          YtFormat *videoP, YtFormat *audioP, UInt32 seconds);
 void StreamFeedFree(StreamFeed *f);
 
 /* The rest is what the player uses. */
 
 UInt32 StreamFeedLength(const StreamFeed *f, UInt16 track);
 /* Downloads from the start into the streams, opened with the lengths
- * above. */
-void StreamFeedStart(StreamFeed *f, Mp4Stream *videoP, Mp4Stream *audioP);
+ * above. With headersFirst, each stops after its segment index (where
+ * the format says it ends) until StreamFeedSeek moves it on. */
+void StreamFeedStart(StreamFeed *f, Mp4Stream *videoP, Mp4Stream *audioP,
+                     Boolean headersFirst);
 /* Goes on from these offsets, where the streams have been moved to. A
  * request in flight is dropped with its connection; idle ones are kept. */
 void StreamFeedSeek(StreamFeed *f, UInt32 videoOffset, UInt32 audioOffset);
+/* True once headersFirst has stopped both streams at their indexes. */
+Boolean StreamFeedHeld(const StreamFeed *f);
 /* Moves what has arrived into the rings. Call it often, saying whether
  * video is playing: reads are paced harder then. */
 void StreamFeedStep(StreamFeed *f, Boolean playing);

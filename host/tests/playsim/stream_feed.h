@@ -16,7 +16,9 @@
 typedef struct StreamFeed StreamFeed;
 
 UInt32 StreamFeedLength(const StreamFeed *f, UInt16 track);
-void StreamFeedStart(StreamFeed *f, Mp4Stream *videoP, Mp4Stream *audioP);
+void StreamFeedStart(StreamFeed *f, Mp4Stream *videoP, Mp4Stream *audioP,
+                     Boolean headersFirst);
+Boolean StreamFeedHeld(const StreamFeed *f);
 void StreamFeedSeek(StreamFeed *f, UInt32 videoOffset, UInt32 audioOffset);
 void StreamFeedStep(StreamFeed *f, Boolean playing);
 void StreamFeedStop(StreamFeed *f);

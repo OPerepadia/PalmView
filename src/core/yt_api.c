@@ -299,6 +299,7 @@ static void ResetCurrentFormat(YtPlayer *p)
 {
     p->curItag = 0;
     p->curLength = 0;
+    p->curIndexEnd = 0;
     p->curHasUrl = false;
     p->curUnusable = false;
 }
@@ -309,11 +310,10 @@ void YtPlayerInit(YtPlayer *playerP, const UInt16 *videoItagsP,
     UInt16 i;
     MemSet(playerP, sizeof(*playerP), 0);
     playerP->codecP = codecP;
-    for (i = 0; i < YT_MAX_ITAG_CHOICES && videoItagsP[i] != 0; i++)
+    for (i = 0; i < YT_VIDEO_CHOICES && videoItagsP[i] != 0; i++)
         playerP->videoItags[i] = videoItagsP[i];
     for (i = 0; i < YT_MAX_ITAG_CHOICES && audioItagsP[i] != 0; i++)
         playerP->audioItags[i] = audioItagsP[i];
-    playerP->videoRank = YT_MAX_ITAG_CHOICES;
     playerP->audioRank = YT_MAX_ITAG_CHOICES;
 }
 
@@ -341,6 +341,9 @@ Boolean YtPlayerValue(void *contextP, const JsonScanner *s, UInt16 type,
                    "streamingData/adaptiveFormats/#/contentLength")) {
         TextParseUInt32(textP, &p->curLength);
     } else if (JsonPathFrom(s, 0,
+                   "streamingData/adaptiveFormats/#/indexRange/end")) {
+        if (TextParseUInt32(textP, &p->curIndexEnd)) p->curIndexEnd++;
+    } else if (JsonPathFrom(s, 0,
                    "streamingData/adaptiveFormats/#/signatureCipher") ||
                JsonPathFrom(s, 0, "streamingData/adaptiveFormats/#/drmFamilies/#")) {
         p->curUnusable = true;
@@ -366,37 +369,48 @@ Boolean YtPlayerValue(void *contextP, const JsonScanner *s, UInt16 type,
     return true;
 }
 
-static void TakeFormat(YtFormat *formatP, UInt16 *bestRankP, UInt16 rank,
-                       const YtPlayer *p)
+static void TakeFormat(YtFormat *formatP, const YtPlayer *p)
 {
-    if (rank >= *bestRankP) return;
-    *bestRankP = rank;
     formatP->found = true;
     formatP->itag = p->curItag;
     formatP->contentLength = p->curLength;
+    formatP->indexEnd = p->curIndexEnd;
     StrCopy(formatP->url, p->curUrl);
 }
 
 Boolean YtPlayerEnd(void *contextP, const JsonScanner *s)
 {
     YtPlayer *p = (YtPlayer *)contextP;
-    UInt16 rank;
+    UInt16 rank, i;
     if (!JsonPathIs(s, "streamingData/adaptiveFormats/#")) return true;
     /* contentLength is required: downloads are made in ranges. */
     if (p->curHasUrl && !p->curUnusable && p->curLength != 0) {
-        if (ItagRank(p->videoItags, p->curItag, &rank))
-            TakeFormat(&p->video, &p->videoRank, rank, p);
-        else if (ItagRank(p->audioItags, p->curItag, &rank))
-            TakeFormat(&p->audio, &p->audioRank, rank, p);
+        for (i = 0; i < YT_VIDEO_CHOICES; i++)
+            if (p->curItag == p->videoItags[i] && !p->video[i].found)
+                TakeFormat(&p->video[i], p);
+        if (ItagRank(p->audioItags, p->curItag, &rank) && rank < p->audioRank) {
+            p->audioRank = rank;
+            TakeFormat(&p->audio, p);
+        }
     }
     ResetCurrentFormat(p);
     return true;
 }
 
+const YtFormat *YtPlayerVideo(const YtPlayer *playerP, UInt16 choice)
+{
+    UInt16 i;
+    if (choice < YT_VIDEO_CHOICES && playerP->video[choice].found)
+        return &playerP->video[choice];
+    for (i = 0; i < YT_VIDEO_CHOICES; i++)
+        if (playerP->video[i].found) return &playerP->video[i];
+    return 0;
+}
+
 Boolean YtPlayerPlayable(const YtPlayer *playerP)
 {
     return StringIs(playerP->status, "OK") && !playerP->live &&
-        playerP->video.found && playerP->audio.found;
+        YtPlayerVideo(playerP, 0) != 0 && playerP->audio.found;
 }
 
 /* Search responses */

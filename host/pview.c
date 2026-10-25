@@ -195,9 +195,9 @@ static Boolean LoadPlayer(const char *videoIdP, YtPlayer *playerP)
     printf("status: %s %s\ntitle: %s\nauthor: %s\nlength: %lu s%s\n",
         playerP->status, playerP->reason, playerP->title, playerP->author,
         (unsigned long)playerP->lengthSeconds, playerP->live ? " (live)" : "");
-    if (playerP->video.found)
-        printf("video: itag %u, %lu bytes\n", playerP->video.itag,
-            (unsigned long)playerP->video.contentLength);
+    if (playerP->video[0].found)
+        printf("video: itag %u, %lu bytes\n", playerP->video[0].itag,
+            (unsigned long)playerP->video[0].contentLength);
     if (playerP->audio.found)
         printf("audio: itag %u, %lu bytes\n", playerP->audio.itag,
             (unsigned long)playerP->audio.contentLength);
@@ -320,7 +320,7 @@ static int Get(const char *videoIdP, const char *dirP)
     snprintf(audioPath, sizeof(audioPath), "%s/%s.audio.mp4", dirP, videoIdP);
     TextFileName(player.title, videoIdP, ".mp4", name, sizeof(name), 0);
     snprintf(outPath, sizeof(outPath), "%s/%s", dirP, name);
-    if (!Download(&player.video, videoPath) ||
+    if (!Download(&player.video[0], videoPath) ||
         !Download(&player.audio, audioPath)) return 1;
     printf("output: %s\n", outPath);
     return Merge(videoPath, audioPath, outPath);

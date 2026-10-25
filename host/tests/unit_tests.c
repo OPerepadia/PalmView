@@ -292,6 +292,39 @@ static long ReadSample(const char *pathP, UInt8 *dataP, long capacity)
     return length;
 }
 
+/* Each quality's itag gets its own slot, with where its index ends. */
+static void TestPlayerFormats(void)
+{
+    static const UInt16 kVideo[] = { 160, 133, 0 }, kAudio[] = { 140, 139, 0 };
+    static YtPlayer player;
+    static Char value[YT_JSON_VALUE_CAPACITY];
+    JsonScanner scanner;
+    long length, done;
+    UInt8 *dataP = (UInt8 *)malloc(1 << 20);
+    length = dataP != 0 ? ReadSample("testdata/player-visionos.json", dataP, 1 << 20) : -1;
+    Expect("player reply readable", length > 0);
+    if (length <= 0) {
+        free(dataP);
+        return;
+    }
+    YtPlayerInit(&player, kVideo, kAudio, &kWestern);
+    JsonScanInit(&scanner, value, sizeof(value), YtPlayerValue, YtPlayerEnd, &player);
+    for (done = 0; done < length; done += 4096)
+        JsonScanFeed(&scanner, dataP + done,
+            (UInt16)(length - done < 4096 ? length - done : 4096));
+    free(dataP);
+    Expect("player reply parsed", JsonScanFinish(&scanner) == jsonOk);
+    Expect("144p found", player.video[0].found && player.video[0].itag == 160 &&
+        player.video[0].contentLength == 2058142UL && player.video[0].indexEnd == 1227);
+    Expect("240p found", player.video[1].found && player.video[1].itag == 133 &&
+        player.video[1].contentLength == 4310122UL && player.video[1].indexEnd == 1228);
+    Expect("preferred audio", player.audio.found && player.audio.itag == 140 &&
+        player.audio.indexEnd == 1019);
+    Expect("choice offered", YtPlayerVideo(&player, 1) == &player.video[1]);
+    player.video[1].found = false;
+    Expect("missing choice falls back", YtPlayerVideo(&player, 1) == &player.video[0]);
+}
+
 /* Sum of channel differences between RGB565 pixels and 8-bit RGB */
 static long Difference(const UInt16 *pixelsP, const UInt8 *rgbP, long count)
 {
@@ -367,6 +400,7 @@ int main(void)
     TestUrls();
     TestRedirects();
     TestApiRequests();
+    TestPlayerFormats();
     TestThumbnails();
     if (gFailures != 0) {
         printf("%d unit test(s) failed\n", gFailures);

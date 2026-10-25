@@ -81,6 +81,10 @@ Boolean Mp4StreamReceived(const Mp4Stream *s);
 
 /* Reads what has arrived. True once *trackP is filled in. */
 Boolean Mp4StreamReady(Mp4Stream *s);
+/* Reads on past the moov to the segment index, if one follows, so the
+ * stream can start at any segment before its first sample. True once
+ * there is nothing more to wait for; segmentCount says if there is one. */
+Boolean Mp4StreamIndexed(Mp4Stream *s);
 /* Copies the next sample into bufferP; sampleP->offset is its offset in
  * the stream. */
 UInt16 Mp4StreamNext(Mp4Stream *s, Mp4Sample *sampleP, UInt8 *bufferP,

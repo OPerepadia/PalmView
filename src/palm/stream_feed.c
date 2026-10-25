@@ -23,12 +23,13 @@
 /* Reads per stream in one StreamFeedStep, while data keeps coming. */
 #define READS_PER_STEP 4
 /* While the stream being fetched has at least half its ring buffered, its
- * response is read at no more than this, a little above both streams'
- * bitrate together. Each 16 KB TLS record is decrypted in one go, and a
- * frame due meanwhile is late: read faster, and too many frames are.
- * Below half, it is read at twice this while video plays, and as fast as
- * it comes while nothing does. */
-#define PACE_BYTES_PER_SECOND (32UL * 1024UL)
+ * response is read at a pace a little above both streams' bitrate
+ * together: PACE_PERCENT of it, and at least PACE_MINIMUM. Each 16 KB TLS
+ * record is decrypted in one go, and a frame due meanwhile is late: read
+ * faster, and too many frames are. Below half, it is read at twice the
+ * pace while video plays, and as fast as it comes while nothing does. */
+#define PACE_PERCENT 125
+#define PACE_MINIMUM (32UL * 1024UL)
 
 /* A response that sends nothing this long is taken as stalled, and asked
  * for again on a new connection. */
@@ -42,6 +43,7 @@ typedef struct FeedTrack {
     NetJob *jobP;
     NetJobResult result;
     UInt32 offset;          /* next byte to ask for */
+    UInt32 limit;           /* asks stop here until a seek, if not 0 */
     UInt32 retryTicks;      /* when to connect again, if waiting */
     Boolean waiting;
     UInt16 failures;
@@ -56,6 +58,7 @@ struct StreamFeed {
     const YtClient *clientP;
     FeedTrack tracks[2];
     FeedTrack *activeP;     /* the track with a request in flight, or 0 */
+    UInt32 pace;            /* bytes per second */
     UInt32 allowance;       /* bytes a paced read may take now */
     UInt32 paceTicks;       /* when the allowance last grew */
     UInt32 received;
@@ -67,9 +70,10 @@ struct StreamFeed {
 };
 
 StreamFeed *StreamFeedNew(const NetJobConfig *configP, const YtClient *clientP,
-                          YtFormat *videoP, YtFormat *audioP)
+                          YtFormat *videoP, YtFormat *audioP, UInt32 seconds)
 {
     StreamFeed *f = (StreamFeed *)MemPtrNew(sizeof(StreamFeed));
+    UInt32 rate = 0;
     if (f == 0) return 0;
     MemSet(f, sizeof(*f), 0);
     f->config = *configP;
@@ -77,6 +81,10 @@ StreamFeed *StreamFeedNew(const NetJobConfig *configP, const YtClient *clientP,
     f->config.idleTimeoutTicks = (Int32)IDLE_SECONDS * SysTicksPerSecond();
     f->config.keepAlive = true;
     f->clientP = clientP;
+    if (seconds != 0)
+        rate = (videoP->contentLength / seconds + audioP->contentLength / seconds) /
+            100 * PACE_PERCENT;
+    f->pace = rate > PACE_MINIMUM ? rate : PACE_MINIMUM;
     f->tracks[STREAM_FEED_VIDEO].formatP = videoP;
     f->tracks[STREAM_FEED_AUDIO].formatP = audioP;
     f->tracks[STREAM_FEED_VIDEO].feedP = f;
@@ -98,7 +106,8 @@ UInt32 StreamFeedLength(const StreamFeed *f, UInt16 track)
     return f->tracks[track].formatP->contentLength;
 }
 
-void StreamFeedStart(StreamFeed *f, Mp4Stream *videoP, Mp4Stream *audioP)
+void StreamFeedStart(StreamFeed *f, Mp4Stream *videoP, Mp4Stream *audioP,
+                     Boolean headersFirst)
 {
     UInt16 i;
     StreamFeedStop(f);
@@ -109,6 +118,7 @@ void StreamFeedStart(StreamFeed *f, Mp4Stream *videoP, Mp4Stream *audioP)
         FeedTrack *t = &f->tracks[i];
         t->streamP = i == STREAM_FEED_VIDEO ? videoP : audioP;
         t->offset = 0;
+        t->limit = headersFirst ? t->formatP->indexEnd : 0;
         t->waiting = false;
         t->failures = 0;
         t->redirects = 0;
@@ -152,11 +162,23 @@ void StreamFeedSeek(StreamFeed *f, UInt32 videoOffset, UInt32 audioOffset)
     for (i = 0; i < 2; i++) {
         FeedTrack *t = &f->tracks[i];
         t->offset = i == STREAM_FEED_VIDEO ? videoOffset : audioOffset;
+        t->limit = 0;
         t->waiting = false;
         t->failures = 0;
         t->redirects = 0;
         UdpLogLine(f->config.logP, t->tagP, "seek to %", t->offset, 0, 0);
     }
+}
+
+Boolean StreamFeedHeld(const StreamFeed *f)
+{
+    UInt16 i;
+    if (f->activeP != 0) return false;
+    for (i = 0; i < 2; i++) {
+        const FeedTrack *t = &f->tracks[i];
+        if (t->limit == 0 || t->offset < t->limit) return false;
+    }
+    return true;
 }
 
 const Char *StreamFeedError(const StreamFeed *f)
@@ -191,7 +213,7 @@ static Int16 Receive(void *contextP, const UInt8 *dataP, UInt16 length)
 
 static void Request(StreamFeed *f, FeedTrack *t)
 {
-    UInt32 length = t->formatP->contentLength;
+    UInt32 length = t->limit != 0 ? t->limit : t->formatP->contentLength;
     UInt32 room = Mp4StreamSpace(t->streamP);
     UInt32 end;
     const Char *pathP;
@@ -269,10 +291,11 @@ static void Finished(StreamFeed *f, FeedTrack *t)
  * otherwise more the emptier its ring. */
 static UInt32 Want(const FeedTrack *t)
 {
+    UInt32 end = t->limit != 0 ? t->limit : t->formatP->contentLength;
     UInt32 left, space, need;
-    if (t->streamP == 0 || t->offset >= t->formatP->contentLength) return 0;
+    if (t->streamP == 0 || t->offset >= end) return 0;
     if (t->waiting && (Int32)(TimGetTicks() - t->retryTicks) < 0) return 0;
-    left = t->formatP->contentLength - t->offset;
+    left = end - t->offset;
     space = Mp4StreamSpace(t->streamP);
     need = t->streamP->capacity / REFILL_DIVISOR;
     if (need > left) need = left;
@@ -284,7 +307,7 @@ void StreamFeedStep(StreamFeed *f, Boolean playing)
 {
     FeedTrack *t = f->activeP;
     UInt32 now = TimGetTicks(), elapsed = now - f->paceTicks;
-    UInt32 rate = PACE_BYTES_PER_SECOND;
+    UInt32 rate = f->pace;
     Boolean paced = playing, low = false;
     UInt16 i;
     if (elapsed > SysTicksPerSecond()) elapsed = SysTicksPerSecond();

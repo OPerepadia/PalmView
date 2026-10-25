@@ -91,6 +91,7 @@ int main(int argc, char **argv)
     Mp4Stream stream;
     Mp4ReadTrack track, *wantTrackP;
     Mp4Sample s, w;
+    Boolean indexed = false;
     UInt8 *partP, *ringP;
     UInt32 partSize, mergedSize, sent = 0, samples = 0, ringSize, k;
     FILE *mergedP;
@@ -134,6 +135,15 @@ int main(int argc, char **argv)
                 track.channels != wantTrackP->channels ||
                 track.sampleRate != wantTrackP->sampleRate)
                 return Fail("track description differs", 0);
+        }
+        /* A player starting later reads the index before any sample. */
+        if (!indexed) {
+            if (!Mp4StreamIndexed(&stream)) {
+                if (sent == partSize) return Fail("index never complete", 0);
+                continue;
+            }
+            if (stream.segmentCount == 0) return Fail("no index before samples", 0);
+            indexed = true;
         }
         while ((result = Mp4StreamNext(&stream, &s, got, sizeof(got))) ==
                 mp4StreamSample) {

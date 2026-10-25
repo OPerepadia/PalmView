@@ -25,6 +25,7 @@
 #define YT_SEARCH_MAX 20
 #define YT_JSON_VALUE_CAPACITY YT_URL_CAPACITY
 #define YT_MAX_ITAG_CHOICES 4
+#define YT_VIDEO_CHOICES 2
 
 /* The client YouTube sees. Defaults are the visionOS app, which currently
  * returns direct stream URLs without a JavaScript challenge or PO token.
@@ -76,6 +77,7 @@ Boolean YtApplyRedirect(Char *urlP, UInt16 capacity, const Char *locationP);
 typedef struct YtFormat {
     UInt16 itag;
     UInt32 contentLength;
+    UInt32 indexEnd;        /* the byte after the segment index, or 0 */
     Boolean found;
     Char url[YT_URL_CAPACITY];
 } YtFormat;
@@ -88,28 +90,31 @@ typedef struct YtPlayer {
     Char visitor[YT_VISITOR_CAPACITY];
     UInt32 lengthSeconds;
     Boolean live;
-    UInt16 videoItags[YT_MAX_ITAG_CHOICES];
+    UInt16 videoItags[YT_VIDEO_CHOICES];
     UInt16 audioItags[YT_MAX_ITAG_CHOICES];
-    UInt16 videoRank;
     UInt16 audioRank;
-    YtFormat video;
+    YtFormat video[YT_VIDEO_CHOICES];   /* by videoItags; found if offered */
     YtFormat audio;
     /* The adaptive format being read. */
     UInt16 curItag;
     UInt32 curLength;
+    UInt32 curIndexEnd;
     Boolean curHasUrl;
     Boolean curUnusable;
     Char curUrl[YT_URL_CAPACITY];
     const TextCodec *codecP;    /* for the text above */
 } YtPlayer;
 
-/* Itag lists are in order of preference and end with 0. Text is stored
- * in codecP, or Western when it is 0. */
+/* Itag lists end with 0. Each video itag, up to YT_VIDEO_CHOICES, gets
+ * its slot in video[]; audio itags are in order of preference. Text is
+ * stored in codecP, or Western when it is 0. */
 void YtPlayerInit(YtPlayer *playerP, const UInt16 *videoItagsP,
                   const UInt16 *audioItagsP, const TextCodec *codecP);
 Boolean YtPlayerValue(void *contextP, const JsonScanner *scannerP,
                       UInt16 type, const Char *textP, UInt16 length);
 Boolean YtPlayerEnd(void *contextP, const JsonScanner *scannerP);
+/* video[choice] if YouTube offers it, else the first one it does, or 0. */
+const YtFormat *YtPlayerVideo(const YtPlayer *playerP, UInt16 choice);
 Boolean YtPlayerPlayable(const YtPlayer *playerP);
 
 typedef struct YtSearchItem {

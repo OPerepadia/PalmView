@@ -8,11 +8,12 @@
  *
  *   playback_sim FILE.mp4 [LOAD] [PAUSE_AT_SECONDS]
  *   playback_sim --stream VIDEO.mp4 AUDIO.mp4 KB_PER_S [OUTAGE_AT SECONDS]
- *       [--seek AT TO]...
+ *       [--seek AT TO]... [--start SECONDS]
  *
  * The second form streams YouTube's two DASH files over a simulated
  * network of the given speed, which can drop out for a while. --seek moves
- * to TO seconds of the video once AT seconds have passed.
+ * to TO seconds of the video once AT seconds have passed. --start begins
+ * that far in, as switching quality does.
  *
  * Checks that every decoded frame is shown or skipped, that all sound is
  * played, that pausing holds the position, and that playback ends. Shows
@@ -202,6 +203,7 @@ struct StreamFeed {
 };
 
 static StreamFeed gFeed;
+static UInt32 gStartMs;
 
 UInt32 StreamFeedLength(const StreamFeed *f, UInt16 track) { return f->lengths[track]; }
 const Char *StreamFeedError(const StreamFeed *f) { (void)f; return 0; }
@@ -215,8 +217,13 @@ void StreamFeedSeek(StreamFeed *f, UInt32 videoOffset, UInt32 audioOffset)
     f->backlog[0] = f->backlog[1] = 0;
 }
 
-void StreamFeedStart(StreamFeed *f, Mp4Stream *videoP, Mp4Stream *audioP)
+/* Index ends are not simulated: the streams download from the start. */
+Boolean StreamFeedHeld(const StreamFeed *f) { (void)f; return false; }
+
+void StreamFeedStart(StreamFeed *f, Mp4Stream *videoP, Mp4Stream *audioP,
+                     Boolean headersFirst)
 {
+    (void)headersFirst;
     f->streams[0] = videoP;
     f->streams[1] = audioP;
     f->offsets[0] = f->offsets[1] = 0;
@@ -333,6 +340,8 @@ Int32 ArmModuleCall(ArmModule *m, UInt32 command, const UInt32 *argsP,
         case armCmdInit:
             m->callP->out[0] = ARM_MODULE_VERSION;
             return 0;
+        case armCmdHeapAdd:
+            return 0;
         case armCmdVideoOpen:
             return DecVideoOpen((const uint8_t *)(uintptr_t)argsP[0], argsP[1], argsP[2]);
         case armCmdVideoDecode:
@@ -410,7 +419,7 @@ static const Char *OpenFeed(char **argv, int argc)
     gFeed.bytesPerMs = atof(argv[4]) * 1024.0 / 1000.0;
     gFeed.outageStart = argc > 6 ? atof(argv[5]) * 1000.0 : -1;
     gFeed.outageEnd = argc > 6 ? gFeed.outageStart + atof(argv[6]) * 1000.0 : -1;
-    return PlaybackOpenStream(&gPlayback, &gFeed);
+    return PlaybackOpenStream(&gPlayback, &gFeed, false, gStartMs);
 }
 
 #define MAX_SEEKS 4
@@ -431,16 +440,24 @@ int main(int argc, char **argv)
     UInt32 position, played = 0;
     UInt16 level = 0;
     int failed = 0;
-    while (argc > 3 && strcmp(argv[argc - 3], "--seek") == 0 && seeks < MAX_SEEKS) {
-        seekAt[seeks] = atof(argv[argc - 2]) * 1000.0;
-        seekTo[seeks] = atof(argv[argc - 1]) * 1000.0;
-        seeks++;
-        argc -= 3;
+    for (;;) {
+        if (argc > 3 && strcmp(argv[argc - 3], "--seek") == 0 && seeks < MAX_SEEKS) {
+            seekAt[seeks] = atof(argv[argc - 2]) * 1000.0;
+            seekTo[seeks] = atof(argv[argc - 1]) * 1000.0;
+            seeks++;
+            argc -= 3;
+        } else if (argc > 2 && strcmp(argv[argc - 2], "--start") == 0) {
+            gStartMs = (UInt32)(atof(argv[argc - 1]) * 1000.0);
+            argc -= 2;
+        } else {
+            break;
+        }
     }
     if (argc < 2 || (streaming && argc < 5)) {
         fprintf(stderr, "usage: playback_sim FILE.mp4 [LOAD] [PAUSE_AT_SECONDS]\n"
             "       playback_sim --stream VIDEO.mp4 AUDIO.mp4 KB_PER_S "
-            "[OUTAGE_AT SECONDS [PAUSE_AT_SECONDS]] [--seek AT TO]...\n");
+            "[OUTAGE_AT SECONDS [PAUSE_AT_SECONDS]] [--seek AT TO]... "
+            "[--start SECONDS]\n");
         return 2;
     }
     if (!streaming && argc > 2) gLoad = atof(argv[2]);

@@ -174,8 +174,8 @@ UInt16 NetJobStep(NetJob **jobPP)
             sourceP->pacedBytes += n;
         else if (gPlaying)
             sourceP->playingBytes += n;
-        if (sourceP->pacedBytes > PACE_BYTES_PER_SECOND + 2 * NET_JOB_IO_CAPACITY ||
-            sourceP->playingBytes > 2 * PACE_BYTES_PER_SECOND + 2 * NET_JOB_IO_CAPACITY)
+        if (sourceP->pacedBytes > PACE_MINIMUM + 2 * NET_JOB_IO_CAPACITY ||
+            sourceP->playingBytes > 2 * PACE_MINIMUM + 2 * NET_JOB_IO_CAPACITY)
             Fail("paced reads too fast");
     }
     if (jobP->bodyProcP(jobP->contextP, jobP->sourceP->dataP + jobP->next,
@@ -247,8 +247,18 @@ int main(int argc, char **argv)
     }
     YtClientDefaults(&client);
     MemSet(&config, sizeof(config), 0);
-    f = StreamFeedNew(&config, &client, &formats[0], &formats[1]);
-    StreamFeedStart(f, &streams[0], &streams[1]);
+    /* 240p and its sound over 213 s: 36 KB/s, paced a quarter above. */
+    {
+        YtFormat video = formats[0], audio = formats[1];
+        video.contentLength = 4310122UL;
+        audio.contentLength = 3449447UL;
+        f = StreamFeedNew(&config, &client, &video, &audio, 213);
+        if (f == 0 || f->pace != 45500UL) Fail("pace from the bitrates");
+        StreamFeedFree(f);
+    }
+    /* Without the length, as here, the pace is the minimum. */
+    f = StreamFeedNew(&config, &client, &formats[0], &formats[1], 0);
+    StreamFeedStart(f, &streams[0], &streams[1], false);
     for (loops = 0; !(ended[0] && ended[1]); loops++) {
         Boolean waiting = false;
         if (loops == MAX_LOOPS) Fail("streams never finished");

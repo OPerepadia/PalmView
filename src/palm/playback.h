@@ -33,6 +33,8 @@ typedef struct Playback {
     Boolean moduleLoaded;
     UInt8 *arenaP;
     UInt32 arenaSize;
+    UInt8 *extraP;              /* more decoder heap for large video */
+    UInt32 extraSize;
     UInt32 heapFree;            /* before the arena, for the log */
     UInt32 heapChunk;           /* the largest free chunk then */
     Mp4Reader *readerP;
@@ -42,6 +44,7 @@ typedef struct Playback {
     UInt32 fileSize;
     Boolean fileOpen;
     Boolean decoderOpen;
+    Boolean large;              /* frames bigger than 144p */
 
     /* Output rectangle in the framebuffer, native pixels, and the area it
      * is fitted into */
@@ -56,6 +59,7 @@ typedef struct Playback {
     /* Streaming */
     struct StreamFeed *feedP;   /* 0 when playing a file */
     Mp4Stream streams[2];       /* video, audio */
+    UInt32 startMs;             /* where to start, until the streams do */
     UInt8 *ringsP[2];
     UInt32 ringSizes[2];
     Boolean buffering;          /* the clock waits for data */
@@ -101,6 +105,7 @@ typedef struct Playback {
 
     /* Decoder state */
     UInt32 queued;          /* decoded frames waiting */
+    UInt16 queueDepth;      /* at most */
     UInt32 frontPts;        /* pts of the oldest */
     Boolean draining;
     Boolean inputEnded;
@@ -109,6 +114,7 @@ typedef struct Playback {
     UInt32 catchUpMs;
 
     UInt16 level;
+    UInt16 bestLevel;       /* the best this video may use */
     UInt16 skippedInRow;
     UInt16 calmWindows;
     UInt16 calmNeeded;      /* grows when a level does not hold */
@@ -143,9 +149,12 @@ typedef struct Playback {
 /* Opens pathP on the card and starts the decoder. Returns 0, or a message
  * saying what went wrong. Call PlaybackClose either way. */
 const Char *PlaybackOpen(Playback *p, const Char *pathP);
-/* Streams instead. The decoders start once the first seconds are in. The
- * feed must outlive the playback. */
-const Char *PlaybackOpenStream(Playback *p, struct StreamFeed *feedP);
+/* Streams instead, from startMs (rounded down to a segment start). The
+ * decoders start once the first seconds are in. large says the frames are
+ * bigger than 144p, so the memory they need is set aside first. The feed
+ * must outlive the playback. */
+const Char *PlaybackOpenStream(Playback *p, struct StreamFeed *feedP,
+                               Boolean large, UInt32 startMs);
 void PlaybackClose(Playback *p);
 
 /* Fits the video into boundsP (standard coordinates on the display).

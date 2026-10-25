@@ -26,7 +26,7 @@
 #define CLIENT_FILE STORE_DIR "/client.txt"
 #define CLIENT_FILE_CAPACITY 1024
 #define PREFS_ID 0
-#define PREFS_VERSION 3
+#define PREFS_VERSION 4
 #define MAX_SAVED 32
 #define SAVED_NAME_CAPACITY 64
 /* Redirects in a row a download follows. */
@@ -52,8 +52,10 @@
 /* Three lines each: the title on up to two, then the details */
 #define RESULT_ROWS 3
 #define RESULT_ROW_HEIGHT 38
-/* Leaves room for the title's tab around the text. */
+/* Leaves room for the title's tab around the text, and beside it for the
+ * quality picker when there is one. */
 #define PLAY_TITLE_WIDTH 150
+#define PLAY_TITLE_SHORT_WIDTH 112
 #define NO_RESULT 0xFFFF
 
 /* 3 dB apart; 1024 is unity gain. */
@@ -61,7 +63,10 @@ static const UInt16 kVolumeGain[VOLUME_LEVELS] = {
     0, 45, 64, 91, 128, 181, 256, 362, 512, 724, 1024
 };
 
-static const UInt16 kVideoItags[] = { 160, 0 };
+/* Video qualities, in the order of their itags */
+enum { quality144 = 0, quality240 };
+static const UInt16 kVideoItags[] = { 160, 133, 0 };
+static const Char kQualityNames[YT_VIDEO_CHOICES][5] = { "144p", "240p" };
 static const UInt16 kAudioItags[] = { 140, 139, 0 };
 
 typedef enum Task {
@@ -87,6 +92,7 @@ typedef struct AppPrefs {
     Char visitor[YT_VISITOR_CAPACITY];
     UInt16 volume;              /* level, below VOLUME_LEVELS */
     Char history[HISTORY_MAX][HISTORY_CAPACITY];    /* "" when unused */
+    UInt16 quality;             /* the one last chosen in the player */
 } AppPrefs;
 
 typedef struct AppState {
@@ -168,6 +174,7 @@ typedef struct AppState {
     Char logDest[24];           /* "a.b.c.d:port" from client.txt, or "" */
     UdpLog *logP;               /* 0 without a log= line */
     Char playPath[STORE_PATH_CAPACITY];     /* empty to stream */
+    UInt16 playChoice;          /* the quality streaming */
     Char playTitle[64];
     Char playStatus[128];
 } AppState;
@@ -392,8 +399,10 @@ static void LoadSettings(AppState *s)
     Char *textP;
     UInt16 length = 0;
     MemSet(&s->prefs, sizeof(s->prefs), 0);
+    /* Version 3 had everything before quality. */
     if (PrefGetAppPreferences(APP_CREATOR, PREFS_ID, &s->prefs, &size, true) ==
-            noPreferenceFound || size != sizeof(s->prefs)) {
+            noPreferenceFound || (size != sizeof(s->prefs) &&
+            size != OffsetOf(AppPrefs, quality))) {
         MemSet(&s->prefs, sizeof(s->prefs), 0);
         s->prefs.volume = VOLUME_DEFAULT;
     }
@@ -401,6 +410,7 @@ static void LoadSettings(AppState *s)
     for (i = 0; i < HISTORY_MAX; i++)
         s->prefs.history[i][HISTORY_CAPACITY - 1] = '\0';
     if (s->prefs.volume >= VOLUME_LEVELS) s->prefs.volume = VOLUME_DEFAULT;
+    if (s->prefs.quality >= YT_VIDEO_CHOICES) s->prefs.quality = quality144;
     YtClientDefaults(&s->client);
     /* A client.txt on the card overrides the client when YouTube changes
      * what it accepts; see README. */
@@ -958,6 +968,13 @@ static void AppendTwoLines(const TextCodec *codecP, Char *dstP,
     FntSetFont(font);
 }
 
+/* The chosen quality, or the one YouTube offers instead */
+static UInt16 VideoChoice(const AppState *s)
+{
+    const YtFormat *formatP = YtPlayerVideo(s->playerP, s->prefs.quality);
+    return formatP != 0 ? (UInt16)(formatP - s->playerP->video) : quality144;
+}
+
 static void BuildInfo(AppState *s)
 {
     const YtSearchItem *itemP = &s->searchP->items[s->selected];
@@ -984,9 +1001,12 @@ static void BuildInfo(AppState *s)
         Append(infoP, capacity, " | ");
         Append(infoP, capacity, itemP->published);
     }
-    if (playerP->video.found && playerP->audio.found) {
-        Append(infoP, capacity, "\n144p video ");
-        AppendSize(infoP, capacity, playerP->video.contentLength);
+    if (YtPlayerVideo(playerP, 0) != 0 && playerP->audio.found) {
+        UInt16 choice = VideoChoice(s);
+        Append(infoP, capacity, "\n");
+        Append(infoP, capacity, kQualityNames[choice]);
+        Append(infoP, capacity, " video ");
+        AppendSize(infoP, capacity, playerP->video[choice].contentLength);
         Append(infoP, capacity, ", audio ");
         AppendSize(infoP, capacity, playerP->audio.contentLength);
     }
@@ -1222,16 +1242,17 @@ static void FinishPlayer(AppState *s)
         } else if (playerP->live) {
             StrCopy(s->progress, "Live streams are not supported.");
         } else {
-            StrCopy(s->progress, "No 144p H.264 + AAC streams offered.");
+            StrCopy(s->progress, "No 144p or 240p H.264 + AAC streams offered.");
         }
     }
 }
 
 /* Download and merge */
 
-static const YtFormat *CurrentFormat(const AppState *s)
+static YtFormat *CurrentFormat(const AppState *s)
 {
-    return s->stream == 0 ? &s->playerP->video : &s->playerP->audio;
+    return s->stream == 0 ? &s->playerP->video[VideoChoice(s)]
+        : &s->playerP->audio;
 }
 
 static void CloseFile(AppState *s)
@@ -1361,8 +1382,8 @@ static void StartDownload(AppState *s)
         return;
     }
     /* Both streams plus the merged copy. */
-    needed = (playerP->video.contentLength + playerP->audio.contentLength) *
-        2UL + 65536UL;
+    needed = (playerP->video[VideoChoice(s)].contentLength +
+        playerP->audio.contentLength) * 2UL + 65536UL;
     if (StoreFreeBytes(s->volume, &freeBytes) == errNone && freeBytes < needed) {
         StrCopy(s->progress, "Not enough space on the card: need ");
         AppendSize(s->progress, sizeof(s->progress), needed);
@@ -1400,8 +1421,7 @@ static void FinishChunk(AppState *s)
     Char message[80];
     /* YouTube moves some streams to another server. */
     if (s->jobResult.redirected) {
-        YtFormat *formatP = s->stream == 0 ? &s->playerP->video
-            : &s->playerP->audio;
+        YtFormat *formatP = CurrentFormat(s);
         if (++s->redirects <= MAX_REDIRECTS &&
             YtApplyRedirect(formatP->url, sizeof(formatP->url), s->location)) {
             StartChunk(s);
@@ -1792,9 +1812,12 @@ static void ClosePlayback(AppState *s)
     s->resumeOnEnter = false;
 }
 
-/* Streams the selected video when playPath is empty. */
-static const Char *StartPlayback(AppState *s)
+/* Streams the selected video from startMs when playPath is empty. When
+ * 240p cannot start, for want of memory, it streams 144p. */
+static const Char *StartPlayback(AppState *s, UInt32 startMs)
 {
+    UInt16 choice = VideoChoice(s);
+    const Char *errorP;
     s->playbackP = (Playback *)MemPtrNew(sizeof(Playback));
     if (s->playbackP == 0) return "Out of memory.";
     if (s->playPath[0] != '\0') return PlaybackOpen(s->playbackP, s->playPath);
@@ -1802,55 +1825,42 @@ static const Char *StartPlayback(AppState *s)
         MemSet(s->playbackP, sizeof(Playback), 0);
         return "Wi-Fi unavailable.";
     }
-    s->feedP = StreamFeedNew(&s->netConfig, &s->client, &s->playerP->video,
-        &s->playerP->audio);
-    if (s->feedP == 0) {
-        MemSet(s->playbackP, sizeof(Playback), 0);
-        return "Out of memory.";
+    for (;;) {
+        s->feedP = StreamFeedNew(&s->netConfig, &s->client,
+            &s->playerP->video[choice], &s->playerP->audio,
+            s->playerP->lengthSeconds);
+        if (s->feedP == 0) {
+            MemSet(s->playbackP, sizeof(Playback), 0);
+            return "Out of memory.";
+        }
+        s->playChoice = choice;
+        errorP = PlaybackOpenStream(s->playbackP, s->feedP, choice != quality144,
+            startMs);
+        if (errorP == 0 || choice == quality144 ||
+            !s->playerP->video[quality144].found)
+            return errorP;
+        UdpLogLine(s->logP, "play", "240p: no memory, playing 144p", 0, 0, 0);
+        PlaybackClose(s->playbackP);
+        StreamFeedFree(s->feedP);
+        s->feedP = 0;
+        choice = quality144;
     }
-    return PlaybackOpenStream(s->playbackP, s->feedP);
 }
 
-static void OpenPlayForm(AppState *s)
+/* The quality picker shows what is streaming. */
+static void ShowQuality(const AppState *s)
+{
+    CtlSetLabel((ControlType *)GetObject(PlayQualityTrigger),
+        kQualityNames[s->playChoice]);
+    LstSetSelection((ListType *)GetObject(PlayQualityList), (Int16)s->playChoice);
+}
+
+/* Opens playback from startMs, and plays it if play is set. */
+static void StartPlayAt(AppState *s, UInt32 startMs, Boolean play)
 {
     FormType *formP = FrmGetActiveForm();
     RectangleType bounds, formBounds;
-    const Char *nameP = s->playPath, *p, *errorP;
-    UInt16 length;
-    FontID font;
-    for (p = s->playPath; *p != '\0'; p++)
-        if (*p == '/') nameP = p + 1;
-    if (s->playPath[0] == '\0')
-        nameP = s->playerP->title[0] != '\0' ? s->playerP->title
-            : s->searchP->items[s->selected].title;
-    length = StrLen(nameP);
-    if (s->playPath[0] != '\0' && length > 4) length -= 4;    /* ".mp4" */
-    if (length >= sizeof(s->playTitle))
-        length = TextCharStart(&s->codec, nameP, sizeof(s->playTitle) - 1);
-    MemMove(s->playTitle, nameP, length);
-    s->playTitle[length] = '\0';
-    font = FntSetFont(boldFont);
-    if (FntCharsWidth(s->playTitle, (Int16)length) > PLAY_TITLE_WIDTH) {
-        const Char *ellipsisP = TextEllipsis(&s->codec);
-        UInt16 ellipsis = StrLen(ellipsisP);
-        while (length > 0 && (length + ellipsis >= sizeof(s->playTitle) ||
-                FntCharsWidth(s->playTitle, (Int16)length) +
-                FntCharsWidth(ellipsisP, (Int16)ellipsis) > PLAY_TITLE_WIDTH))
-            length = TextCharStart(&s->codec, s->playTitle, (UInt16)(length - 1));
-        StrCopy(s->playTitle + length, ellipsisP);
-    }
-    FntSetFont(font);
-    FrmSetTitle(formP, s->playTitle);
-    StrCopy(s->playStatus, s->playPath[0] != '\0' ? "Loading..." : "Connecting...");
-    FldSetTextPtr((FieldType *)GetObject(PlayStatusField), s->playStatus);
-    s->seekDragging = false;
-    s->volumeDragging = false;
-    s->skipPending = false;
-    FrmDrawForm(formP);
-    ClearVideoArea();
-    DrawVolume(s);
-
-    errorP = StartPlayback(s);
+    const Char *errorP = StartPlayback(s, startMs);
     if (errorP == 0) {
         PlaybackSetVolume(s->playbackP, kVolumeGain[s->prefs.volume]);
         GetVideoBounds(&bounds);
@@ -1866,6 +1876,7 @@ static void OpenPlayForm(AppState *s)
         ShowObject(PlayPauseButton, false);
         return;
     }
+    if (s->feedP != 0) ShowQuality(s);
     if (s->logP != 0) {
         const Playback *p = s->playbackP;
         UInt32 freeBytes, maxChunk;
@@ -1874,13 +1885,88 @@ static void OpenPlayForm(AppState *s)
             p->heapFree / 1024, p->heapChunk / 1024, 0);
         UdpLogLine(s->logP, "mem", "arena % KB, rings % + % KB",
             p->arenaSize / 1024, p->ringSizes[0] / 1024, p->ringSizes[1] / 1024);
+        if (p->extraSize != 0)
+            UdpLogLine(s->logP, "mem", "extra % KB", p->extraSize / 1024, 0, 0);
         UdpLogLine(s->logP, "mem", "after: heap % KB free, thumbnails % KB",
             freeBytes / 1024, ThumbBytes(s) / 1024, 0);
     }
-    PlaybackPlay(s->playbackP);
+    if (play) PlaybackPlay(s->playbackP);
+    CtlSetLabel((ControlType *)GetObject(PlayPauseButton),
+        s->playbackP->playing ? "Pause" : "Play");
+    ShowObject(PlayPauseButton, true);
     s->playWait = 0;
     s->playStatusTicks = TimGetTicks();
     DrawSeekBar(s);
+}
+
+static void OpenPlayForm(AppState *s)
+{
+    FormType *formP = FrmGetActiveForm();
+    const Char *nameP = s->playPath, *p;
+    UInt16 length;
+    Coord width = PLAY_TITLE_WIDTH;
+    Boolean picker = s->playPath[0] == '\0' &&
+        s->playerP->video[quality144].found && s->playerP->video[quality240].found;
+    FontID font;
+    for (p = s->playPath; *p != '\0'; p++)
+        if (*p == '/') nameP = p + 1;
+    if (s->playPath[0] == '\0')
+        nameP = s->playerP->title[0] != '\0' ? s->playerP->title
+            : s->searchP->items[s->selected].title;
+    length = StrLen(nameP);
+    if (s->playPath[0] != '\0' && length > 4) length -= 4;    /* ".mp4" */
+    if (length >= sizeof(s->playTitle))
+        length = TextCharStart(&s->codec, nameP, sizeof(s->playTitle) - 1);
+    MemMove(s->playTitle, nameP, length);
+    s->playTitle[length] = '\0';
+    if (picker) width = PLAY_TITLE_SHORT_WIDTH;
+    font = FntSetFont(boldFont);
+    if (FntCharsWidth(s->playTitle, (Int16)length) > width) {
+        const Char *ellipsisP = TextEllipsis(&s->codec);
+        UInt16 ellipsis = StrLen(ellipsisP);
+        while (length > 0 && (length + ellipsis >= sizeof(s->playTitle) ||
+                FntCharsWidth(s->playTitle, (Int16)length) +
+                FntCharsWidth(ellipsisP, (Int16)ellipsis) > width))
+            length = TextCharStart(&s->codec, s->playTitle, (UInt16)(length - 1));
+        StrCopy(s->playTitle + length, ellipsisP);
+    }
+    FntSetFont(font);
+    FrmSetTitle(formP, s->playTitle);
+    StrCopy(s->playStatus, s->playPath[0] != '\0' ? "Loading..." : "Connecting...");
+    FldSetTextPtr((FieldType *)GetObject(PlayStatusField), s->playStatus);
+    s->seekDragging = false;
+    s->volumeDragging = false;
+    s->skipPending = false;
+    if (picker) {
+        s->playChoice = VideoChoice(s);
+        ShowQuality(s);
+        ShowObject(PlayQualityTrigger, true);
+    }
+    FrmDrawForm(formP);
+    ClearVideoArea();
+    DrawVolume(s);
+    StartPlayAt(s, 0, true);
+}
+
+/* Streams the chosen quality from where the other one got to. */
+static void SwitchQuality(AppState *s, UInt16 choice)
+{
+    Playback *p = s->playbackP;
+    UInt32 ms;
+    Boolean play;
+    s->prefs.quality = choice;
+    s->prefsChanged = true;
+    if (p == 0 || s->feedP == 0 || choice == s->playChoice) return;
+    ms = s->skipPending ? s->seekTargetMs : PlaybackPositionMs(p);
+    play = p->playing;
+    s->skipPending = false;
+    ClosePlayback(s);
+    ClearVideoArea();
+    StrCopy(s->playStatus, "Switching to ");
+    Append(s->playStatus, sizeof(s->playStatus), kQualityNames[choice]);
+    Append(s->playStatus, sizeof(s->playStatus), "...");
+    SetFieldText(PlayStatusField, s->playStatus);
+    StartPlayAt(s, ms, play);
 }
 
 /* After a seek: an ended video plays again from there. */
@@ -1990,6 +2076,8 @@ static void ReturnFromPlay(AppState *s)
     FrmReturnToForm(0);
     FrmDrawForm(FrmGetActiveForm());
     if (OnForm(DetailForm)) {
+        /* The sizes are for the quality chosen in the player. */
+        BuildInfo(s);
         RefreshDetail(s);
         StartThumbs(s);
     }
@@ -2209,6 +2297,12 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
             }
             break;
         case popSelectEvent:
+            if (eventP->data.popSelect.controlID == PlayQualityTrigger) {
+                Int16 selection = eventP->data.popSelect.selection;
+                if (selection >= 0 && selection < YT_VIDEO_CHOICES)
+                    SwitchQuality(s, (UInt16)selection);
+                return true;
+            }
             /* Handled here so the trigger keeps its empty label. */
             if (eventP->data.popSelect.controlID == HistoryTrigger) {
                 Int16 selection = eventP->data.popSelect.selection;

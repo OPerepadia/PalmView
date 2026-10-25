@@ -1,9 +1,9 @@
 # PalmView
 
 YouTube for the Palm TX, with no helper server. PalmView searches YouTube
-and plays a video's 144p H.264 and AAC streams with sound. It can stream
-them over HTTPS, or download and merge them into one MP4 on the memory
-card. You can also play saved files in CorePlayer.
+and plays a video's 144p or 240p H.264 and AAC streams with sound. It can
+stream them over HTTPS, or download and merge them into one MP4 on the
+memory card. You can also play saved files in CorePlayer.
 
 Status: downloading, playback with sound, and streaming work on a Palm TX.
 
@@ -12,8 +12,9 @@ Status: downloading, playback with sound, and streaming work on a Palm TX.
 1. Search and video info use YouTube's own API (`/youtubei/v1/search` and
    `/player`), posing as the visionOS app. That client currently gets direct
    stream URLs, with no JavaScript challenge and no PO token.
-2. The app downloads itag 160 (256x144 H.264) and itag 140 (AAC-LC) in 4 MB
-   ranges. HTTPS comes from [PalmTLS](https://github.com/palmsnipe/palm-tls).
+2. The app downloads itag 160 (256x144 H.264), or itag 133 (426x240) for
+   240p, and itag 140 (AAC-LC) in 4 MB ranges. HTTPS comes from
+   [PalmTLS](https://github.com/palmsnipe/palm-tls).
 3. YouTube serves the two streams as separate fragmented MP4 files.
    `src/core/mp4_merge.c` rebuilds them into one regular MP4, with the moov
    box first. Its packets match `ffmpeg -c copy` output exactly.
@@ -58,6 +59,12 @@ time, after a few seconds of loading.
 Press up and down on the 5-way navigator to change the volume. PalmView
 remembers it.
 
+When YouTube offers both, the trigger at the top right of the player
+switches between 144p and 240p. Playback goes on from the start of the
+piece of video that holds the current time, as when jumping. PalmView
+remembers the choice for the next video and for downloads. 240p needs an
+overclocked TX; see [240p](#240p).
+
 **Cancel** stops a download; tap **Download** again to resume it. Partial
 streams stay in `/PalmView` as `<id>.video.mp4` and `<id>.audio.mp4` until
 the merge succeeds.
@@ -89,7 +96,7 @@ If YouTube says "Sign in to confirm you're not a bot", try again, or use
 
 ## Limitations
 
-- 144p only, and only videos that offer H.264 and AAC streams.
+- 144p and 240p only, and only videos that offer H.264 and AAC streams.
 - No live streams, "made for kids", age-restricted or members-only videos.
 - Titles are converted to the Palm's Latin-1 text; Cyrillic is
   transliterated. With CJKOS on, set to Shift-JIS, titles and searches are
@@ -137,16 +144,18 @@ network log below has more.
   handshake gets through. Keeping connections open matters too: each new
   TLS handshake blocks the player for about 2 s.
 - While a stream has at least half its ring buffered, its response is read
-  at no more than 32 KB/s, a little above both streams' bitrate together.
-  A response comes at up to 200 KB/s, and each 16 KB TLS record is
-  decrypted in one go: read that fast, too many frames come late. Below
-  half it is read at 64 KB/s while video plays, as after a seek, and at
-  full speed while nothing plays, as at the start.
+  at a quarter above both streams' bitrate together, and at least 32 KB/s:
+  32 KB/s at 144p and about 45 KB/s at 240p. A response comes at up to
+  200 KB/s, and each 16 KB TLS record is decrypted in one go: read that
+  fast, too many frames come late. Below half it is read at twice that
+  while video plays, as after a seek, and at full speed while nothing
+  plays, as at the start.
 - A response that sends nothing for 5 s is asked for again on a new
   connection. A dropped connection starts again where it stopped. Redirects
   to another YouTube server are followed, for downloads too.
 - The two rings share up to 512 KB of the heap, split by bitrate. At 144p
-  (about 26 KB/s for both streams) that is about 20 seconds.
+  (about 26 KB/s for both streams) that is about 20 seconds. At 240p the
+  decoder's second block leaves less, about 10 seconds.
 - `src/core/mp4_stream.c` takes each sample out of its ring once all of it
   has arrived. Only the current moof is kept besides the ring.
 - Playback starts with 3 seconds of both streams in. When either runs dry,
@@ -158,6 +167,9 @@ network log below has more.
   segments are 10 s long. The request in flight, if any, is dropped with
   its connection; idle connections are reused. The decoders then start
   again as they do at the start.
+- Switching quality streams the other video from the same point. The new
+  streams first ask only for their moov and segment index (where YouTube's
+  `indexRange` says it ends), then seek, so no connection is dropped.
 - Network calls never wait during playback. The sockets stay non-blocking,
   so TLS does not wait for the rest of a 16 KB record, and a socket is only
   read when it has data. The network gets a turn at least every 20 ms.
@@ -193,6 +205,40 @@ nothing is sent.
 
 On a Palm TX, a 25 fps 144p video takes about 25 ms per frame to decode at
 full quality and 19 ms without deblocking (measured with PalmView Bench).
+
+### 240p
+
+240p has 2.8 times the pixels of 144p. PalmView plays it at the lowest
+quality level only: without deblocking, and without the frames nothing
+else refers to. That is about half the frames, 12 fps for a 25 fps video.
+
+At the stock 312 MHz, a TX cannot keep up even then, and busy scenes drop
+to a few frames a second. Most of the decoding time goes to waiting for
+memory, which runs off the bus clock, so raising only the CPU clock helps
+little. With the warpSpeed overclocker at BUS 20 and CPU:BUS 4 (bus
+260 MHz, CPU 520 MHz), 240p plays at its full 12 fps with the CPU about
+55% busy. Showing every frame would need about twice that.
+
+Measured on a TX with PalmView Bench (Rick Astley, 240p, first 20 s, every
+frame with deblocking) and while streaming it:
+
+| CPU | Bus | Cache miss | Bench | Streaming at the lowest level |
+| --- | --- | --- | --- | --- |
+| 312 MHz | 208 MHz | 460 ns | 16.5 fps | about 7.5 fps, choppy in busy scenes |
+| 520 MHz | 208 MHz | 450 ns | 19.5 fps | about 11 fps |
+| 520 MHz | 260 MHz | 360 ns | 23.3 fps | 11.9 fps, CPU 40-70% |
+
+A 67% faster CPU decodes only 18% faster; a 25% faster bus cuts every
+cache miss by a fifth. That splits a 240p frame at stock speed into about
+23 ms of work and 37 ms of waiting. Prefetching does not help: `PLD`
+reads a megabyte 2.7 times as fast, but FFmpeg's own prefetches (its
+ARMv5TE build) left decoding as fast as before.
+
+The decoder needs about 2.3 MB for 240p, more than the largest free block
+of a TX's heap. It takes a second block from elsewhere. When there is
+not enough memory for that, PalmView streams 144p instead. Shrinking each
+426x240 frame into the 320x180 picture converts only the pixels it keeps:
+1.5 M instructions a frame instead of 2.7 M.
 
 ### PalmView Bench
 

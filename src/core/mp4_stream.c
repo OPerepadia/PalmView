@@ -315,6 +315,27 @@ Boolean Mp4StreamReady(Mp4Stream *s)
     return s->ready;
 }
 
+Boolean Mp4StreamIndexed(Mp4Stream *s)
+{
+    UInt8 header[8];
+    if (!Mp4StreamReady(s)) return s->status != mp4MergeOk;
+    while (s->segmentsP == 0 && s->status == mp4MergeOk) {
+        if (s->state == stateSkip) {
+            Drop(s, s->skipEnd);
+            if (s->readOffset < s->skipEnd) return false;
+            s->next = s->skipEnd;
+            s->state = stateBox;
+        }
+        if (s->state != stateBox || s->next >= s->totalSize) return true;
+        if (s->writeOffset - s->next < 8) return false;
+        Copy(s, s->next, header, 8);
+        /* Fragments have begun: there is no index. */
+        if (Mp4Get32(header + 4) == MP4_FOURCC('m', 'o', 'o', 'f')) return true;
+        if (ReadBox(s) == mp4StreamWait) return false;
+    }
+    return true;
+}
+
 UInt16 Mp4StreamNext(Mp4Stream *s, Mp4Sample *sampleP, UInt8 *bufferP,
                      UInt32 capacity)
 {
