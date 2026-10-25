@@ -49,8 +49,9 @@
 /* Level 0 is silent. */
 #define VOLUME_LEVELS 11
 #define VOLUME_DEFAULT 6
-#define RESULT_ROWS 5
-#define RESULT_ROW_HEIGHT 23
+/* Three lines each: the title on up to two, then the details */
+#define RESULT_ROWS 3
+#define RESULT_ROW_HEIGHT 38
 /* Leaves room for the title's tab around the text. */
 #define PLAY_TITLE_WIDTH 150
 #define NO_RESULT 0xFFFF
@@ -613,9 +614,9 @@ static void AppendShort(Char *lineP, UInt16 capacity, const Char *textP)
     AppendDetail(lineP, capacity, text);
 }
 
-/* A result: its thumbnail, or a gray box until it arrives, then two lines:
- * the title and "1.8B · 10y ago · Channel". Drawn in native pixels for a
- * hairline under each result. */
+/* A result: its thumbnail, or a gray box until it arrives, the title on
+ * one or two lines, cut with "..." after two, and "1.8B · 10y ago ·
+ * Channel". Drawn in native pixels for a hairline under each result. */
 static void DrawResultRow(const AppState *s, UInt16 row)
 {
     static const RGBColorType kText = { 0, 0x00, 0x00, 0x00 };
@@ -627,8 +628,8 @@ static void DrawResultRow(const AppState *s, UInt16 row)
     const YtSearchItem *itemP = &s->searchP->items[item];
     const Thumb *thumbP = &s->thumbs[item];
     RectangleType bounds, thumb;
-    UInt16 coordinates;
-    Coord margin, lineHeight, width, bottom;
+    UInt16 coordinates, first, lines;
+    Coord margin, lineHeight, left, width, y, bottom;
     Char line[80];
     GetResultBounds(&bounds);
     bounds.topLeft.y += row * RESULT_ROW_HEIGHT;
@@ -648,11 +649,6 @@ static void DrawResultRow(const AppState *s, UInt16 row)
             WinSetBackColorRGB(&kFocus, 0);
             WinEraseRectangle(&bounds, 0);
         }
-        line[0] = '\0';
-        if (itemP->live) AppendDetail(line, sizeof(line), "Live");
-        AppendShort(line, sizeof(line), itemP->views);
-        AppendShort(line, sizeof(line), itemP->published);
-        AppendDetail(line, sizeof(line), itemP->channel);
         FntSetFont(stdFont);
         lineHeight = FntLineHeight();
         margin = WinScaleCoord(2, false);
@@ -665,16 +661,25 @@ static void DrawResultRow(const AppState *s, UInt16 row)
             WinSetForeColorRGB(&kPlaceholder, 0);
             WinDrawRectangle(&thumb, 0);
         }
-        width = bounds.topLeft.x + bounds.extent.x - margin;
-        bounds.topLeft.x = thumb.topLeft.x + thumb.extent.x + 2 * margin;
-        width -= bounds.topLeft.x;
-        bounds.topLeft.y += (bounds.extent.y - 2 * lineHeight) / 2;
+        left = thumb.topLeft.x + thumb.extent.x + 2 * margin;
+        width = bounds.topLeft.x + bounds.extent.x - margin - left;
+        first = FntWordWrap(itemP->title, (UInt16)width);
+        lines = itemP->title[first] != '\0' ? 3 : 2;
+        y = bounds.topLeft.y + (bounds.extent.y - lines * lineHeight) / 2;
         WinSetTextColorRGB(&kText, 0);
-        WinDrawTruncChars(itemP->title, StrLen(itemP->title),
-            bounds.topLeft.x, bounds.topLeft.y, width);
+        WinDrawTruncChars(itemP->title, (Int16)first, left, y, width);
+        if (lines == 3) {
+            y += lineHeight;
+            WinDrawTruncChars(itemP->title + first,
+                (Int16)StrLen(itemP->title + first), left, y, width);
+        }
+        line[0] = '\0';
+        if (itemP->live) AppendDetail(line, sizeof(line), "Live");
+        AppendShort(line, sizeof(line), itemP->views);
+        AppendShort(line, sizeof(line), itemP->published);
+        AppendDetail(line, sizeof(line), itemP->channel);
         WinSetTextColorRGB(&kDetails, 0);
-        WinDrawTruncChars(line, StrLen(line), bounds.topLeft.x,
-            bounds.topLeft.y + lineHeight, width);
+        WinDrawTruncChars(line, StrLen(line), left, y + lineHeight, width);
     }
     WinSetCoordinateSystem(coordinates);
     WinPopDrawState();
