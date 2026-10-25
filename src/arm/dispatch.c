@@ -7,6 +7,7 @@
 #include "armcall.h"
 #include "decoder.h"
 #include "libc_arm.h"
+#include "memtest.h"
 #include "sound.h"
 #include "libavutil/log.h"
 
@@ -117,6 +118,8 @@ static int32_t Run(ArmCall *c, uint32_t command)
             SetOut(c, 0, free);
             return 0;
         }
+        case armCmdMemTest:
+            return MemTest(Arg(c, 0));
         case armCmdVideoOpen:
             return DecVideoOpen((const uint8_t *)Arg(c, 0), Arg(c, 1), Arg(c, 2));
         case armCmdVideoDecode: {

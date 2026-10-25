@@ -67,7 +67,9 @@ enum {
     armCmdSoundPause,
     /* more heap, after armCmdInit
      * args: region, region size; out: heap free */
-    armCmdHeapAdd
+    armCmdHeapAdd,
+    /* args: memTest*; result: as MemTest */
+    armCmdMemTest
 };
 
 /* Stop the sound stream before armCmdClose: it frees the ring. */

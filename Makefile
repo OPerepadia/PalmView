@@ -75,7 +75,8 @@ FFMPEG_ARM := $(DEPS)/ffmpeg-build-arm
 FFMPEG_HOST := $(DEPS)/ffmpeg-build-host
 ARM_INCLUDES := -Isrc/arm -I$(DEPS)/ffmpeg -I$(FFMPEG_ARM)
 ARM_OBJECTS := $(ARM_DIR)/entry.o $(ARM_DIR)/dispatch.o $(ARM_DIR)/decoder.o \
-	$(ARM_DIR)/sound.o $(ARM_DIR)/libc.o $(ARM_DIR)/ffstubs.o
+	$(ARM_DIR)/sound.o $(ARM_DIR)/libc.o $(ARM_DIR)/ffstubs.o \
+	$(ARM_DIR)/memtest.o
 ARM_LIB_FILES := $(FFMPEG_ARM)/libavcodec/libavcodec.a $(FFMPEG_ARM)/libavutil/libavutil.a \
 	$(DEPS)/musl-build-arm/libm.a
 ARM_LDFLAGS := -nostdlib -Wl,--gc-sections -Wl,--emit-relocs -Wl,--no-enum-size-warning \

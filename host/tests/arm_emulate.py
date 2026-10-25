@@ -53,7 +53,7 @@ CALLBACK_FRAMES = 2048
 CMD = dict(init=1, video_open=2, video_decode=3, video_info=4, video_rgb=5,
            audio_open=6, audio_decode=7, audio_info=8, stats=9, close=10,
            ping=11, video_pop=12, sound_open=13, sound_feed=14, sound_state=15,
-           sound_end=16, sound_pause=17, heap_add=18)
+           sound_end=16, sound_pause=17, heap_add=18, mem_test=19)
 MAGIC = 0x50565731
 DEC_CHECKSUM = 0x80
 DEC_RGB_BIG_ENDIAN = 0x01

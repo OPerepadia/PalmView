@@ -201,7 +201,10 @@ full quality and 19 ms without deblocking (measured with PalmView Bench).
 Install `dist/PalmViewBench.prc` (handheld memory or card), then:
 
 - **Info** loads the module, checks a round trip into ARM code, and shows
-  the CPU and heap.
+  the CPU and heap. It then times plain arithmetic, reads and writes in
+  and out of the cache, and loads that each wait for the last. Run it at
+  two clock speeds to see what waits for memory: on a TX, a cache miss
+  takes about 450 ns at the stock bus speed, whatever the CPU clock.
 - **Run** decodes the first 20 seconds of the chosen file's video, then its
   audio, in the chosen mode. It shows decode speed, file read time, color
   conversion speed, memory, and checksums.

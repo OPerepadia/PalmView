@@ -3,7 +3,8 @@
 /* PalmView Bench: loads the native ARM decoder module and measures it on
  * MP4 files saved by PalmView.
  *
- * Info: CPU, heap, module load and an ARM round trip (milestone 1).
+ * Info: CPU, heap, module load, an ARM round trip (milestone 1), and
+ *       CPU and memory speed (see memtest.h).
  * Run:  decodes 20 seconds of the chosen file's video and audio and
  *       reports speed, memory and checksums (milestone 2). The checksums
  *       must match build/host/bench on the same file. */
@@ -12,6 +13,7 @@
 
 #include "arm_module.h"
 #include "decoder.h"
+#include "memtest.h"
 #include "mp4_read.h"
 #include "resource.h"
 #include "store.h"
@@ -141,13 +143,18 @@ static void LogSeconds(Bench *b, UInt32 ticks)
     Log(b, " s");
 }
 
-/* value / ticks per second, with one decimal: frames per second etc. */
-static void LogRate(Bench *b, UInt32 count, UInt32 ticks)
+/* "12.3" from tenths */
+static void LogTenths(Bench *b, UInt32 tenths)
 {
-    UInt32 tenths = ticks == 0 ? 0 : count * 10UL * SysTicksPerSecond() / ticks;
     LogNumber(b, tenths / 10);
     Log(b, ".");
     LogNumber(b, tenths % 10);
+}
+
+/* value / ticks per second, with one decimal: frames per second etc. */
+static void LogRate(Bench *b, UInt32 count, UInt32 ticks)
+{
+    LogTenths(b, ticks == 0 ? 0 : count * 10UL * SysTicksPerSecond() / ticks);
 }
 
 static void LogHeap(Bench *b)
@@ -244,6 +251,46 @@ static Boolean EnsureModule(Bench *b)
     return b->loaded;
 }
 
+/* Nanoseconds per step, from ticks for steps (a multiple of 10000). */
+static void LogStepNs(Bench *b, UInt32 ticks, UInt32 steps)
+{
+    UInt32 us = ticks * 1000000UL / SysTicksPerSecond();
+    LogTenths(b, us / (steps / 10000UL));
+    Log(b, " ns\n");
+}
+
+static void ShowMemory(Bench *b)
+{
+    UInt32 ticks[memTestCount];
+    UInt16 i;
+    Log(b, "Testing memory...\n");
+    ShowLog(b);
+    for (i = 0; i < memTestCount; i++) {
+        UInt32 start = TimGetTicks();
+        if (Call(b, armCmdMemTest, i, 0, 0, 0) < 0) {
+            Log(b, "No memory for the memory test\n");
+            return;
+        }
+        ticks[i] = TimGetTicks() - start;
+    }
+    for (i = memTestReadSmall; i < memTestCount; i++)
+        ticks[i] = ticks[i] > ticks[memTestSetup] ? ticks[i] - ticks[memTestSetup] : 1;
+    Log(b, "ALU: ");
+    LogRate(b, MEM_TEST_ALU_LOOPS / 1000000UL, ticks[memTestAlu]);
+    Log(b, " M loops/s\nRead 4 KB: ");
+    LogRate(b, MEM_TEST_READ_BYTES >> 20, ticks[memTestReadSmall]);
+    Log(b, " MB/s\nRead 1 MB: ");
+    LogRate(b, MEM_TEST_READ_BYTES >> 20, ticks[memTestReadLarge]);
+    Log(b, " MB/s\nRead 1 MB, PLD: ");
+    LogRate(b, MEM_TEST_READ_BYTES >> 20, ticks[memTestReadPld]);
+    Log(b, " MB/s\nWrite 1 MB: ");
+    LogRate(b, MEM_TEST_WRITE_BYTES >> 20, ticks[memTestWriteLarge]);
+    Log(b, " MB/s\nLoad in 4 KB: ");
+    LogStepNs(b, ticks[memTestChaseSmall], MEM_TEST_SMALL_STEPS);
+    Log(b, "Load in 1 MB: ");
+    LogStepNs(b, ticks[memTestChaseLarge], MEM_TEST_LARGE_STEPS);
+}
+
 static void ShowInfo(Bench *b)
 {
     UInt32 rom = 0, cpu = 0;
@@ -261,6 +308,7 @@ static void ShowInfo(Bench *b)
         LogKB(b, Out(b, 3));
         Log(b, "\n");
         LogHeap(b);
+        ShowMemory(b);
     }
     ShowLog(b);
 }
