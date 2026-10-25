@@ -110,6 +110,13 @@ static int32_t Run(ArmCall *c, uint32_t command)
                 SetOut(c, 1, free);
             }
             return 0;
+        case armCmdHeapAdd: {
+            uint32_t used, peak, free;
+            ArmHeapAdd((void *)Arg(c, 0), Arg(c, 1));
+            ArmHeapStats(&used, &peak, &free);
+            SetOut(c, 0, free);
+            return 0;
+        }
         case armCmdVideoOpen:
             return DecVideoOpen((const uint8_t *)Arg(c, 0), Arg(c, 1), Arg(c, 2));
         case armCmdVideoDecode: {

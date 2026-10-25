@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 void ArmHeapInit(void *arenaP, uint32_t size);
+void ArmHeapAdd(void *regionP, uint32_t size);
 void ArmHeapStats(uint32_t *usedP, uint32_t *peakP, uint32_t *freeP);
 
 /* abort() longjmps here (__builtin_setjmp buffer) and sets the flag. */

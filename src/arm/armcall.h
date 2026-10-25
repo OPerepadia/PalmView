@@ -64,11 +64,14 @@ enum {
     /* no more input: silence now counts as played */
     armCmdSoundEnd,
     /* args: 1 to play silence and hold the clock, 0 to go on */
-    armCmdSoundPause
+    armCmdSoundPause,
+    /* more heap, after armCmdInit
+     * args: region, region size; out: heap free */
+    armCmdHeapAdd
 };
 
 /* Stop the sound stream before armCmdClose: it frees the ring. */
 
-#define ARM_MODULE_VERSION 4
+#define ARM_MODULE_VERSION 5
 
 #endif

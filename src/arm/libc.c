@@ -32,8 +32,7 @@ typedef struct Block {
 } Block;
 
 static Block *gFreeList;
-static uint8_t *gHeapStart;
-static uint8_t *gHeapEnd;
+static uint32_t gHeapSize;
 static uint32_t gHeapUsed;
 static uint32_t gHeapPeak;
 
@@ -58,12 +57,18 @@ static void Link(Block *b)
 
 void ArmHeapInit(void *arenaP, uint32_t size)
 {
-    uintptr_t start = ((uintptr_t)arenaP + HEAP_ALIGN - 1) & ~(uintptr_t)(HEAP_ALIGN - 1);
-    uintptr_t end = ((uintptr_t)arenaP + size) & ~(uintptr_t)(HEAP_ALIGN - 1);
-    Block *first, *sentinel;
     gFreeList = 0;
-    gHeapUsed = gHeapPeak = 0;
-    gHeapStart = gHeapEnd = 0;
+    gHeapSize = gHeapUsed = gHeapPeak = 0;
+    ArmHeapAdd(arenaP, size);
+}
+
+/* Each region ends in a used sentinel and starts with prevSize 0, so
+ * blocks never merge across regions. */
+void ArmHeapAdd(void *regionP, uint32_t size)
+{
+    uintptr_t start = ((uintptr_t)regionP + HEAP_ALIGN - 1) & ~(uintptr_t)(HEAP_ALIGN - 1);
+    uintptr_t end = ((uintptr_t)regionP + size) & ~(uintptr_t)(HEAP_ALIGN - 1);
+    Block *first, *sentinel;
     if (end <= start + 2 * HEAP_MIN_BLOCK) return;
     first = (Block *)start;
     sentinel = (Block *)(end - HEAP_HEADER);
@@ -72,15 +77,14 @@ void ArmHeapInit(void *arenaP, uint32_t size)
     sentinel->size = USED;            /* zero-length, always used */
     sentinel->prevSize = first->size;
     Link(first);
-    gHeapStart = (uint8_t *)start;
-    gHeapEnd = (uint8_t *)end;
+    gHeapSize += (uint32_t)(end - start);
 }
 
 void ArmHeapStats(uint32_t *usedP, uint32_t *peakP, uint32_t *freeP)
 {
     *usedP = gHeapUsed;
     *peakP = gHeapPeak;
-    *freeP = (uint32_t)(gHeapEnd - gHeapStart) - gHeapUsed;
+    *freeP = gHeapSize - gHeapUsed;
 }
 
 /* Splits b so it is exactly need bytes, returning the rest to the list. */

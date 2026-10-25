@@ -40,6 +40,7 @@ RW_BASE = 0x20000000
 STACK_BASE, STACK_SIZE = 0x30000000, 0x10000
 NATIVE_STACK = 0x31000000          # stands in for PceNativeCall's 4 KB stack
 ARENA_BASE = 0x40000000
+EXTRA_BASE = 0x48000000
 CALL_ADDR = 0x50000000
 SAMPLE_ADDR = 0x50001000
 PCM_ADDR = 0x50080000
@@ -52,7 +53,7 @@ CALLBACK_FRAMES = 2048
 CMD = dict(init=1, video_open=2, video_decode=3, video_info=4, video_rgb=5,
            audio_open=6, audio_decode=7, audio_info=8, stats=9, close=10,
            ping=11, video_pop=12, sound_open=13, sound_feed=14, sound_state=15,
-           sound_end=16, sound_pause=17)
+           sound_end=16, sound_pause=17, heap_add=18)
 MAGIC = 0x50565731
 DEC_CHECKSUM = 0x80
 DEC_RGB_BIG_ENDIAN = 0x01
@@ -130,7 +131,7 @@ def signed(value):
 
 
 class Module:
-    def __init__(self, res_dir, arena_size, count, profile_map=None):
+    def __init__(self, res_dir, arena_size, count, profile_map=None, extra_size=0):
         # RES_DIR is armlink.py's output directory or a finished PRC.
         if res_dir.endswith(".prc"):
             with open(res_dir, "rb") as handle:
@@ -161,6 +162,8 @@ class Module:
         self.uc.mem_map(STACK_BASE, STACK_SIZE)
         self.uc.mem_map(NATIVE_STACK - 0x1000, 0x2000)
         self.uc.mem_map(ARENA_BASE, (arena_size + 0xFFF) & ~0xFFF)
+        if extra_size:
+            self.uc.mem_map(EXTRA_BASE, (extra_size + 0xFFF) & ~0xFFF)
         self.uc.mem_map(CALL_ADDR, 0x100000)
         self.uc.mem_map(RETURN_ADDR, 0x1000)
         self.segments = []
@@ -310,6 +313,8 @@ def main():
     parser.add_argument("--seconds", type=float, default=1.0)
     parser.add_argument("--skip", type=int, default=0)
     parser.add_argument("--arena", type=int, default=3 * 1024 * 1024)
+    parser.add_argument("--extra", type=int, default=0,
+                        help="a second heap region of this many bytes")
     parser.add_argument("--count", action="store_true")
     parser.add_argument("--png")
     parser.add_argument("--queue", type=int, default=1)
@@ -322,11 +327,14 @@ def main():
 
     with open(args.mp4, "rb") as handle:
         data = handle.read()
-    m = Module(args.res, args.arena, args.count, args.profile)
+    m = Module(args.res, args.arena, args.count, args.profile, args.extra)
     result, _ = m.call("ping", *range(1, 9))
     print(f"ping: {result} (expect 36)")
     result, out = m.call("init", ARENA_BASE, args.arena, STACK_BASE, STACK_SIZE)
     print(f"init: {result}, module version {out[0]}, heap free {out[1]}")
+    if args.extra:
+        result, out = m.call("heap_add", EXTRA_BASE, args.extra)
+        print(f"heap add: {result}, heap free {out[0]}")
 
     avcc = box_payload(data, b"avcC")
     m.uc.mem_write(SAMPLE_ADDR, avcc)
