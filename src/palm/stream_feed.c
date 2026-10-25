@@ -131,6 +131,18 @@ void StreamFeedStop(StreamFeed *f)
     f->activeP = 0;
 }
 
+void StreamFeedReconnect(StreamFeed *f)
+{
+    UInt16 i;
+    StreamFeedStop(f);
+    f->errorP = 0;
+    for (i = 0; i < 2; i++) {
+        f->tracks[i].waiting = false;
+        f->tracks[i].failures = 0;
+    }
+    UdpLogLine(f->config.logP, "feed", "reconnect", 0, 0, 0);
+}
+
 void StreamFeedSeek(StreamFeed *f, UInt32 videoOffset, UInt32 audioOffset)
 {
     UInt16 i;

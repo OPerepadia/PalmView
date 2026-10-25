@@ -330,11 +330,23 @@ static Err ConfigureNetwork(AppState *s)
 }
 
 /* Brings up Wi-Fi on first use; the OS shows its own connection dialog. */
+/* Turning the screen off turns Wi-Fi off and can close Net.lib without
+ * telling the app. */
+static Boolean NetworkOpen(AppState *s)
+{
+    UInt16 count = 0;
+    if (!s->netOpen) return false;
+    if (NetLibOpenCount(s->netRefNum, &count) == errNone && count != 0)
+        return true;
+    s->netOpen = false;
+    return false;
+}
+
 static Err EnsureNetwork(AppState *s)
 {
     UInt16 interfaceErrors = 0;
     Err error;
-    if (s->netOpen) return errNone;
+    if (NetworkOpen(s)) return errNone;
     error = SysLibFind("Net.lib", &s->netRefNum);
     if (error != errNone) return error;
     error = NetLibOpen(s->netRefNum, &interfaceErrors);
@@ -346,7 +358,10 @@ static Err EnsureNetwork(AppState *s)
     if (error != errNone) return error;
     s->netOpen = true;
     s->netConfig.netRefNum = s->netRefNum;
-    if (s->logDest[0] != '\0')
+    /* Jobs keep the log pointer, so it stays the same log. */
+    if (s->logP != 0)
+        UdpLogReconnect(s->logP);
+    else if (s->logDest[0] != '\0')
         s->logP = s->netConfig.logP = UdpLogOpen(s->netRefNum, s->logDest);
     return errNone;
 }
@@ -1023,10 +1038,12 @@ static Boolean RequestThumb(AppState *s, UInt16 item)
         FeedThumb, s, &s->jobResult);
 }
 
+/* Only on an open network: the connection dialog is not worth
+ * a thumbnail. */
 static void StartThumbs(AppState *s)
 {
     UInt16 item = NextThumb(s);
-    if (s->task != taskIdle) return;
+    if (s->task != taskIdle || !NetworkOpen(s)) return;
     if (item == NO_RESULT) {
         StopThumbs(s);
         return;
@@ -1831,16 +1848,11 @@ static void OpenPlayForm(AppState *s)
     DrawSeekBar(s);
 }
 
-static void TogglePause(AppState *s)
+/* After a seek: an ended video plays again from there. */
+static void FinishSeek(AppState *s, Boolean wasEnded)
 {
     Playback *p = s->playbackP;
-    if (p == 0) return;
-    if (p->playing) {
-        PlaybackPause(p);
-    } else {
-        if (p->ended) ClearVideoArea();
-        PlaybackPlay(p);
-    }
+    if (wasEnded) PlaybackPlay(p);
     CtlSetLabel((ControlType *)GetObject(PlayPauseButton),
         p->playing ? "Pause" : "Play");
     s->playWait = 0;
@@ -1848,11 +1860,29 @@ static void TogglePause(AppState *s)
     DrawSeekBar(s);
 }
 
-/* After a seek: an ended video plays again from there. */
-static void FinishSeek(AppState *s, Boolean wasEnded)
+static void TogglePause(AppState *s)
 {
     Playback *p = s->playbackP;
-    if (wasEnded) PlaybackPlay(p);
+    if (p == 0) return;
+    if (p->playing) {
+        PlaybackPause(p);
+    } else {
+        /* Wi-Fi may have gone off with the screen. */
+        if (s->feedP != 0 && !NetworkOpen(s)) {
+            StreamFeedReconnect(s->feedP);
+            if (EnsureNetwork(s) != errNone) return;
+        }
+        /* After a lost connection, go on from where it stopped. */
+        if (s->feedP != 0 && p->ended && PlaybackError(p) != 0 &&
+                PlaybackCanSeek(p)) {
+            ClearVideoArea();
+            PlaybackSeek(p, PlaybackPositionMs(p));
+            FinishSeek(s, true);
+            return;
+        }
+        if (p->ended) ClearVideoArea();
+        PlaybackPlay(p);
+    }
     CtlSetLabel((ControlType *)GetObject(PlayPauseButton),
         p->playing ? "Pause" : "Play");
     s->playWait = 0;

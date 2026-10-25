@@ -29,7 +29,7 @@ static void Send(UdpLog *logP)
 {
     UInt32 start = TimGetTicks(), ms;
     Err error;
-    if (logP->length != 0)
+    if (logP->length != 0 && logP->socket >= 0)
         NetLibSend(logP->netRefNum, logP->socket, logP->buffer, logP->length,
             0, 0, 0, 1, &error);
     logP->length = 0;
@@ -42,15 +42,35 @@ static void Send(UdpLog *logP)
     }
 }
 
+/* Connected, so sends need no address. */
+static Boolean OpenSocket(UdpLog *logP)
+{
+    UInt16 netRefNum = logP->netRefNum;
+    Int16 enabled = 1;
+    Err error;
+    logP->socket = NetLibSocketOpen(netRefNum, netSocketAddrINET,
+        netSocketTypeDatagram, 0, SysTicksPerSecond(), &error);
+    if (logP->socket < 0) return false;
+    if (NetLibSocketConnect(netRefNum, logP->socket,
+            (NetSocketAddrType *)&logP->address, sizeof(logP->address),
+            SysTicksPerSecond(), &error) < 0) {
+        NetLibSocketClose(netRefNum, logP->socket, SysTicksPerSecond(), &error);
+        logP->socket = -1;
+        return false;
+    }
+    NetLibSocketOptionSet(netRefNum, logP->socket, netSocketOptLevelSocket,
+        netSocketOptSockNonBlocking, &enabled, sizeof(enabled),
+        SysTicksPerSecond(), &error);
+    return true;
+}
+
 UdpLog *UdpLogOpen(UInt16 netRefNum, const Char *destP)
 {
     UdpLog *logP;
     Char host[16];
     const Char *colonP = StrChr(destP, ':');
     UInt32 port = 5140;
-    Int16 enabled = 1;
     UInt16 length;
-    Err error;
     length = colonP != 0 ? (UInt16)(colonP - destP) : StrLen(destP);
     if (length == 0 || length >= sizeof(host)) return 0;
     MemMove(host, destP, length);
@@ -66,23 +86,10 @@ UdpLog *UdpLogOpen(UInt16 netRefNum, const Char *destP)
     logP->address.port = NetHToNS((UInt16)port);
     logP->address.addr = NetLibAddrAToIN(netRefNum, host);
     logP->socket = -1;
-    if (logP->address.addr != (NetIPAddr)-1)
-        logP->socket = NetLibSocketOpen(netRefNum, netSocketAddrINET,
-            netSocketTypeDatagram, 0, SysTicksPerSecond(), &error);
-    /* Connected, so sends need no address. */
-    if (logP->socket < 0 ||
-        NetLibSocketConnect(netRefNum, logP->socket,
-            (NetSocketAddrType *)&logP->address, sizeof(logP->address),
-            SysTicksPerSecond(), &error) < 0) {
-        if (logP->socket >= 0)
-            NetLibSocketClose(netRefNum, logP->socket, SysTicksPerSecond(),
-                &error);
+    if (logP->address.addr == (NetIPAddr)-1 || !OpenSocket(logP)) {
         MemPtrFree(logP);
         return 0;
     }
-    NetLibSocketOptionSet(netRefNum, logP->socket, netSocketOptLevelSocket,
-        netSocketOptSockNonBlocking, &enabled, sizeof(enabled),
-        SysTicksPerSecond(), &error);
     logP->startTicks = TimGetTicks();
     UdpLogLine(logP, "log", "start", 0, 0, 0);
     return logP;
@@ -96,6 +103,14 @@ void UdpLogClose(UdpLog *logP)
     NetLibSocketClose(logP->netRefNum, logP->socket, SysTicksPerSecond(),
         &error);
     MemPtrFree(logP);
+}
+
+void UdpLogReconnect(UdpLog *logP)
+{
+    if (logP == 0) return;
+    logP->socket = -1;
+    OpenSocket(logP);
+    UdpLogLine(logP, "log", "reconnected", 0, 0, 0);
 }
 
 static void AppendHex(Char *dstP, UInt16 capacity, UInt16 *lengthP,

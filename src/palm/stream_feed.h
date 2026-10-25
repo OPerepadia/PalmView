@@ -39,6 +39,10 @@ void StreamFeedSeek(StreamFeed *f, UInt32 videoOffset, UInt32 audioOffset);
 void StreamFeedStep(StreamFeed *f, Boolean playing);
 /* Closes the connections. */
 void StreamFeedStop(StreamFeed *f);
+/* Drops the connections, which died with the network, and goes on where
+ * each stream got to. Call it before NetLib opens again: closing their
+ * sockets after could close new ones that got the same numbers. */
+void StreamFeedReconnect(StreamFeed *f);
 /* 0 while streaming can go on, or why it cannot. */
 const Char *StreamFeedError(const StreamFeed *f);
 /* Bytes received so far */

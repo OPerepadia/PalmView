@@ -21,6 +21,9 @@ typedef struct UdpLog UdpLog;
 UdpLog *UdpLogOpen(UInt16 netRefNum, const Char *destP);
 /* Sends what is left and frees the log. */
 void UdpLogClose(UdpLog *logP);
+/* Opens a new socket once NetLib is open again after the system closed it.
+ * The old one is not closed: a new socket may have its number now. */
+void UdpLogReconnect(UdpLog *logP);
 
 /* Adds "seconds.ms tag text" as a line. In formatP, each '%' becomes the
  * next of a, b and c in decimal, and each '$' the next one in hex. */
