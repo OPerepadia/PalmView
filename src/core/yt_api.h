@@ -5,6 +5,7 @@
 
 #include <PalmOS.h>
 #include "json_scan.h"
+#include "text.h"
 
 /* YouTube InnerTube API: request building and response parsing.
  * Feed response bodies through a JsonScanner using the Yt*Value/Yt*End
@@ -51,8 +52,8 @@ UInt16 YtBuildPlayerRequest(const YtClient *clientP, const Char *visitorP,
                             const Char *videoIdP, Char *bodyP,
                             Char *requestP, UInt16 capacity);
 UInt16 YtBuildSearchRequest(const YtClient *clientP, const Char *visitorP,
-                            const Char *queryP, Char *bodyP,
-                            Char *requestP, UInt16 capacity);
+                            const Char *queryP, const TextCodec *codecP,
+                            Char *bodyP, Char *requestP, UInt16 capacity);
 
 /* Splits an https URL into host and the start of its path. */
 Boolean YtSplitUrl(const Char *urlP, Char *hostP, UInt16 hostCapacity,
@@ -99,11 +100,13 @@ typedef struct YtPlayer {
     Boolean curHasUrl;
     Boolean curUnusable;
     Char curUrl[YT_URL_CAPACITY];
+    const TextCodec *codecP;    /* for the text above */
 } YtPlayer;
 
-/* Itag lists are in order of preference and end with 0. */
+/* Itag lists are in order of preference and end with 0. Text is stored
+ * in codecP, or Western when it is 0. */
 void YtPlayerInit(YtPlayer *playerP, const UInt16 *videoItagsP,
-                  const UInt16 *audioItagsP);
+                  const UInt16 *audioItagsP, const TextCodec *codecP);
 Boolean YtPlayerValue(void *contextP, const JsonScanner *scannerP,
                       UInt16 type, const Char *textP, UInt16 length);
 Boolean YtPlayerEnd(void *contextP, const JsonScanner *scannerP);
@@ -124,9 +127,11 @@ typedef struct YtSearch {
     Char visitor[YT_VISITOR_CAPACITY];
     YtSearchItem cur;
     YtSearchItem items[YT_SEARCH_MAX];
+    const TextCodec *codecP;    /* for the text above */
 } YtSearch;
 
-void YtSearchInit(YtSearch *searchP);
+/* Text is stored in codecP, or Western when it is 0. */
+void YtSearchInit(YtSearch *searchP, const TextCodec *codecP);
 Boolean YtSearchValue(void *contextP, const JsonScanner *scannerP,
                       UInt16 type, const Char *textP, UInt16 length);
 Boolean YtSearchEnd(void *contextP, const JsonScanner *scannerP);

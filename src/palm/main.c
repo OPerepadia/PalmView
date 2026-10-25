@@ -97,6 +97,8 @@ typedef struct AppState {
     UInt16 netRefNum;
     Boolean netOpen;
     MemHandle trustH;
+    TextCodec codec;            /* how the Palm shows text */
+    MemHandle jisH;             /* its Japanese table, with CJKOS */
     NetJobConfig netConfig;
 
     YtClient client;
@@ -411,6 +413,25 @@ static void LoadSettings(AppState *s)
         ReadLogDest(s, textP, length);
     }
     MemPtrFree(textP);
+}
+
+/* CJKOS draws Japanese in place of Western text, as Shift-JIS: the
+ * encoding Palm's Japanese devices use. */
+static void SetupText(AppState *s)
+{
+    s->codec.encoding = textWestern;
+    /* Only with CJKOS on do these bytes start two-byte characters. */
+    if ((TxtByteAttr(0x82) & byteAttrFirst) == 0) return;
+    if (s->jisH == 0) {
+        s->jisH = DmGetResource('Tjis', JisTable);
+        if (s->jisH == 0) {
+            s->codec.encoding = textAscii;
+            return;
+        }
+        s->codec.jisP = (const UInt8 *)MemHandleLock(s->jisH);
+        s->codec.jisCount = (UInt16)(MemHandleSize(s->jisH) / 4);
+    }
+    s->codec.encoding = textShiftJis;
 }
 
 static void SaveVisitor(AppState *s, const Char *visitorP)
@@ -857,7 +878,7 @@ static void StartSearch(AppState *s)
     if (s->task != taskIdle || queryP == 0 || queryP[0] == '\0') return;
     RememberSearch(s, queryP);
     FreeThumbs(s);
-    YtSearchInit(s->searchP);
+    YtSearchInit(s->searchP, &s->codec);
     s->resultTop = 0;
     s->resultFocus = NO_RESULT;
     ShowResults(s, true);
@@ -865,7 +886,8 @@ static void StartSearch(AppState *s)
         YtSearchValue, YtSearchEnd, s->searchP);
     SetStatus(s, "Searching...");
     StartApiJob(s, taskSearch, YtBuildSearchRequest(&s->client,
-        s->prefs.visitor, queryP, s->body, s->request, sizeof(s->request)));
+        s->prefs.visitor, queryP, &s->codec, s->body, s->request,
+        sizeof(s->request)));
 }
 
 static void FinishSearch(AppState *s)
@@ -913,22 +935,22 @@ static void ScrollInfo(Int16 lines)
 
 /* Appends textP as a field width wide wraps it, cut with "..." after two
  * lines. */
-static void AppendTwoLines(Char *dstP, UInt16 capacity, const Char *textP,
-                           Coord width)
+static void AppendTwoLines(const TextCodec *codecP, Char *dstP,
+                           UInt16 capacity, const Char *textP, Coord width)
 {
-    UInt16 length = StrLen(dstP), first, second;
+    const Char *ellipsisP = TextEllipsis(codecP);
+    UInt16 length = StrLen(dstP), first, second, ellipsis = StrLen(ellipsisP);
     FontID font = FntSetFont(stdFont);
     first = FntWordWrap(textP, (UInt16)width);
     second = StrLen(textP + first);
     if (FntWordWrap(textP + first, (UInt16)width) < second) {
         while (second > 0 && FntCharsWidth(textP + first, (Int16)second) +
-                FntCharWidth(chrEllipsis) > width)
-            second--;
+                FntCharsWidth(ellipsisP, (Int16)ellipsis) > width)
+            second = TextCharStart(codecP, textP + first, (UInt16)(second - 1));
         while (second > 0 && textP[first + second - 1] == ' ') second--;
-        if (length + first + second + 2 <= capacity) {
+        if (length + first + second + ellipsis < capacity) {
             MemMove(dstP + length, textP, first + second);
-            dstP[length + first + second] = chrEllipsis;
-            dstP[length + first + second + 1] = '\0';
+            StrCopy(dstP + length + first + second, ellipsisP);
         }
     } else {
         Append(dstP, capacity, textP);
@@ -946,7 +968,8 @@ static void BuildInfo(AppState *s)
     FormType *formP = FrmGetActiveForm();
     FrmGetObjectBounds(formP, FrmGetObjectIndex(formP, HeadField), &bounds);
     s->head[0] = '\0';
-    AppendTwoLines(s->head, sizeof(s->head), playerP->title[0] != '\0'
+    AppendTwoLines(&s->codec, s->head, sizeof(s->head),
+        playerP->title[0] != '\0'
         ? playerP->title : itemP->title, bounds.extent.x);
     Append(s->head, sizeof(s->head), "\n");
     Append(s->head, sizeof(s->head), playerP->author[0] != '\0'
@@ -1140,7 +1163,8 @@ static void MakeOutPath(AppState *s)
 {
     const YtSearchItem *itemP = &s->searchP->items[s->selected];
     Char name[64];
-    TextFileName(s->playerP->title, itemP->videoId, ".mp4", name, sizeof(name));
+    TextFileName(s->playerP->title, itemP->videoId, ".mp4", name, sizeof(name),
+        &s->codec);
     StoreMakePath(s->outPath, name);
 }
 
@@ -1159,7 +1183,7 @@ static void StartPlayer(AppState *s)
 {
     const YtSearchItem *itemP = &s->searchP->items[s->selected];
     FreeBitmap(&s->detailThumbP, &s->detailBitsP);
-    YtPlayerInit(s->playerP, kVideoItags, kAudioItags);
+    YtPlayerInit(s->playerP, kVideoItags, kAudioItags, &s->codec);
     s->percent = 0;
     s->saved = false;
     BuildInfo(s);
@@ -1801,16 +1825,19 @@ static void OpenPlayForm(AppState *s)
             : s->searchP->items[s->selected].title;
     length = StrLen(nameP);
     if (s->playPath[0] != '\0' && length > 4) length -= 4;    /* ".mp4" */
-    if (length >= sizeof(s->playTitle)) length = sizeof(s->playTitle) - 1;
+    if (length >= sizeof(s->playTitle))
+        length = TextCharStart(&s->codec, nameP, sizeof(s->playTitle) - 1);
     MemMove(s->playTitle, nameP, length);
     s->playTitle[length] = '\0';
     font = FntSetFont(boldFont);
     if (FntCharsWidth(s->playTitle, (Int16)length) > PLAY_TITLE_WIDTH) {
-        while (length > 0 && FntCharsWidth(s->playTitle, (Int16)length) +
-                FntCharWidth(chrEllipsis) > PLAY_TITLE_WIDTH)
-            length--;
-        s->playTitle[length++] = chrEllipsis;
-        s->playTitle[length] = '\0';
+        const Char *ellipsisP = TextEllipsis(&s->codec);
+        UInt16 ellipsis = StrLen(ellipsisP);
+        while (length > 0 && (length + ellipsis >= sizeof(s->playTitle) ||
+                FntCharsWidth(s->playTitle, (Int16)length) +
+                FntCharsWidth(ellipsisP, (Int16)ellipsis) > PLAY_TITLE_WIDTH))
+            length = TextCharStart(&s->codec, s->playTitle, (UInt16)(length - 1));
+        StrCopy(s->playTitle + length, ellipsisP);
     }
     FntSetFont(font);
     FrmSetTitle(formP, s->playTitle);
@@ -2344,10 +2371,10 @@ static Err StartApplication(AppState *s)
     s->searchTextH = MemHandleNew(64);
     if (s->searchP == 0 || s->playerP == 0 || s->searchTextH == 0)
         return memErrNotEnoughSpace;
-    YtSearchInit(s->searchP);
+    YtSearchInit(s->searchP, &s->codec);
     s->resultFocus = NO_RESULT;
     s->thumbItem = NO_RESULT;
-    YtPlayerInit(s->playerP, kVideoItags, kAudioItags);
+    YtPlayerInit(s->playerP, kVideoItags, kAudioItags, &s->codec);
     *(Char *)MemHandleLock(s->searchTextH) = '\0';
     MemHandleUnlock(s->searchTextH);
     StrCopy(s->status, "Type a search and tap Search.");
@@ -2360,6 +2387,7 @@ static Err StartApplication(AppState *s)
         return error;
     }
     LoadSettings(s);
+    SetupText(s);
     return errNone;
 }
 
@@ -2385,6 +2413,10 @@ static void StopApplication(AppState *s)
     }
     FrmCloseAllForms();
     if (s->savedNamesP != 0) MemPtrFree(s->savedNamesP);
+    if (s->jisH != 0) {
+        MemHandleUnlock(s->jisH);
+        DmReleaseResource(s->jisH);
+    }
     if (s->trustH != 0) {
         MemHandleUnlock(s->trustH);
         DmReleaseResource(s->trustH);

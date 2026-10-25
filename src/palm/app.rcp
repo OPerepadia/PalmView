@@ -5,6 +5,7 @@ DATA "code" ID 2 "code0002.bin"
 DATA "Rloc" ID 1 "relocs.bin"
 // Google Trust Services WR2 + WE2 issuers (tools/update-certs.sh).
 DATA "cert" ID TrustCertificates "../../certs/google.pem"
+DATA "Tjis" ID JisTable "jis.bin"
 // SysAppPrefsType: priority 30, 32 KiB stack, 4 KiB minimum free heap.
 HEX "pref" ID 0 0x00 0x1e 0x00 0x00 0x80 0x00 0x00 0x00 0x10 0x00
 

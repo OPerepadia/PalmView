@@ -88,8 +88,119 @@ static UInt32 DecodeUtf8(const UInt8 *p, UInt16 remaining, UInt16 *usedP)
     return cp;
 }
 
+/* Japanese text */
+
+static UInt16 Get16(const UInt8 *p)
+{
+    return (UInt16)((p[0] << 8) | p[1]);
+}
+
+/* The Shift-JIS code for a character, or 0 */
+static UInt16 JisFor(const TextCodec *codecP, UInt32 cp)
+{
+    UInt16 low = 0, high = codecP->jisCount, middle, key;
+    if (codecP->jisP == 0 || cp > 0xFFFFUL) return 0;
+    while (low < high) {
+        middle = (UInt16)(low + (high - low) / 2);
+        key = Get16(codecP->jisP + (UInt32)middle * 4);
+        if (key == cp) return Get16(codecP->jisP + (UInt32)middle * 4 + 2);
+        if (key < cp) low = (UInt16)(middle + 1);
+        else high = middle;
+    }
+    return 0;
+}
+
+/* The character for a Shift-JIS code, or 0 */
+static UInt32 CharForJis(const TextCodec *codecP, UInt16 code)
+{
+    UInt16 i;
+    if (codecP->jisP == 0) return 0;
+    for (i = 0; i < codecP->jisCount; i++)
+        if (Get16(codecP->jisP + (UInt32)i * 4 + 2) == code)
+            return Get16(codecP->jisP + (UInt32)i * 4);
+    return 0;
+}
+
+/* How many bytes the Palm character at p takes */
+static UInt16 PalmCharSize(UInt16 encoding, const UInt8 *p)
+{
+    if (p[0] < 0x80 || p[1] == 0) return 1;
+    if (encoding == textShiftJis)
+        return (p[0] >= 0x81 && p[0] <= 0x9F) || (p[0] >= 0xE0 && p[0] <= 0xFC)
+            ? 2 : 1;
+    return 1;
+}
+
+UInt16 TextCharStart(const TextCodec *codecP, const Char *textP,
+                     UInt16 offset)
+{
+    const UInt8 *p = (const UInt8 *)textP;
+    UInt16 at = 0, size;
+    if (codecP == 0) return offset;
+    while (at < offset && p[at] != 0) {
+        size = PalmCharSize(codecP->encoding, p + at);
+        if (at + size > offset) break;
+        at = (UInt16)(at + size);
+    }
+    return at;
+}
+
+const Char *TextEllipsis(const TextCodec *codecP)
+{
+    switch (codecP != 0 ? codecP->encoding : textWestern) {
+        case textWestern: return "\x85";
+        case textShiftJis: return "\x81\x63";
+        default: return "...";
+    }
+}
+
+/* ASCII for punctuation Japanese fonts draw too wide */
+static Char AsciiFor(UInt32 cp)
+{
+    switch (cp) {
+        case 0x00A0: return ' ';
+        case 0x2018: case 0x2019: case 0x201A: case 0x2032: return '\'';
+        case 0x201C: case 0x201D: case 0x201E: case 0x2033: return '"';
+        case 0x2010: case 0x2011: case 0x2012: case 0x2013: case 0x2014:
+        case 0x2015: case 0x2212: return '-';
+        case 0x2022: return '*';
+        default: return 0;
+    }
+}
+
+/* U+00C0 to U+00FF without accents, for Japanese text */
+static const Char kLatinBase[] =
+    "AAAAAAACEEEEIIIIDNOOOOOxOUUUUYTsaaaaaaaceeeeiiiidnooooo/ouuuuyty";
+
+/* Puts one or two bytes, all or none. */
+static Boolean PutCode(Char *dstP, UInt16 capacity, UInt16 *lengthP,
+                       UInt16 code)
+{
+    if (code < 0x100) return PutChar(dstP, capacity, lengthP, (Char)code);
+    if (*lengthP + 2 >= capacity) return false;
+    PutChar(dstP, capacity, lengthP, (Char)(code >> 8));
+    return PutChar(dstP, capacity, lengthP, (Char)(code & 0xFF));
+}
+
+/* The Palm code for a character, or 0 if there is none */
+static UInt16 PalmCodeFor(const TextCodec *codecP, UInt32 cp)
+{
+    UInt16 encoding = codecP != 0 ? codecP->encoding : textWestern;
+    UInt16 code;
+    Char c;
+    if (encoding == textWestern) {
+        code = PalmByteFor(cp);
+        return code >= 0x20 ? code : 0;
+    }
+    if (cp >= 0x20 && cp < 0x7F) return (UInt16)cp;
+    if ((c = AsciiFor(cp)) != 0) return (UInt8)c;
+    if (cp >= 0xC0 && cp <= 0xFF) return (UInt8)kLatinBase[cp - 0xC0];
+    if (encoding == textAscii) return 0;
+    return JisFor(codecP, cp);
+}
+
 UInt16 TextUtf8ToPalm(const Char *srcP, UInt16 srcLength, Char *dstP,
-                      UInt16 capacity)
+                      UInt16 capacity, const TextCodec *codecP)
 {
     const UInt8 *p = (const UInt8 *)srcP;
     UInt16 length = 0;
@@ -98,20 +209,14 @@ UInt16 TextUtf8ToPalm(const Char *srcP, UInt16 srcLength, Char *dstP,
     if (capacity == 0) return 0;
     dstP[0] = '\0';
     while (offset < srcLength) {
-        UInt16 used;
+        UInt16 used, code;
         UInt32 cp = DecodeUtf8(p + offset, srcLength - offset, &used);
-        UInt8 byte;
         Boolean lower;
         const Char *latinP;
         offset += used;
         if (IsInvisible(cp)) continue;
         if (cp == '\n' || cp == '\r' || cp == '\t') cp = ' ';
-        byte = PalmByteFor(cp);
-        if (byte >= 0x20) {
-            if (!PutChar(dstP, capacity, &length, (Char)byte)) break;
-            lastUnknown = false;
-            continue;
-        }
+        /* Cyrillic is better transliterated than drawn full-width. */
         latinP = CyrillicLatin(cp, &lower);
         if (latinP != 0) {
             for (; *latinP != '\0'; latinP++) {
@@ -119,6 +224,12 @@ UInt16 TextUtf8ToPalm(const Char *srcP, UInt16 srcLength, Char *dstP,
                 if (lower && c >= 'A' && c <= 'Z') c = (Char)(c + ('a' - 'A'));
                 if (!PutChar(dstP, capacity, &length, c)) return length;
             }
+            lastUnknown = false;
+            continue;
+        }
+        code = PalmCodeFor(codecP, cp);
+        if (code != 0) {
+            if (!PutCode(dstP, capacity, &length, code)) break;
             lastUnknown = false;
             continue;
         }
@@ -162,14 +273,27 @@ static Boolean AppendUtf8(Char *dstP, UInt16 capacity, UInt16 *lengthP,
         PutChar(dstP, capacity, lengthP, (Char)(0x80 | (cp & 0x3F)));
 }
 
+/* The character a Palm one stands for, or 0 */
+static UInt32 CharForPalm(const TextCodec *codecP, const UInt8 *p,
+                          UInt16 size)
+{
+    UInt16 code = size == 2 ? Get16(p) : p[0];
+    if (p[0] < 0x80) return p[0];
+    if (codecP->encoding == textWestern)
+        return p[0] < 0xA0 ? kCp1252High[p[0] - 0x80] : p[0];
+    return codecP->encoding == textAscii ? 0 : CharForJis(codecP, code);
+}
+
 Boolean TextAppendJson(Char *dstP, UInt16 capacity, UInt16 *lengthP,
-                       const Char *srcP, Boolean fromPalm)
+                       const Char *srcP, const TextCodec *codecP)
 {
     static const Char hex[] = "0123456789abcdef";
     const UInt8 *p = (const UInt8 *)srcP;
-    for (; *p != 0; p++) {
+    UInt16 size;
+    for (; *p != 0; p += size) {
         UInt8 c = *p;
         Boolean ok;
+        size = codecP != 0 ? PalmCharSize(codecP->encoding, p) : 1;
         if (c == '"' || c == '\\') {
             ok = PutChar(dstP, capacity, lengthP, '\\') &&
                 PutChar(dstP, capacity, lengthP, (Char)c);
@@ -177,8 +301,8 @@ Boolean TextAppendJson(Char *dstP, UInt16 capacity, UInt16 *lengthP,
             ok = TextAppend(dstP, capacity, lengthP, "\\u00") &&
                 PutChar(dstP, capacity, lengthP, hex[c >> 4]) &&
                 PutChar(dstP, capacity, lengthP, hex[c & 0x0F]);
-        } else if (c >= 0x80 && fromPalm) {
-            UInt32 cp = c < 0xA0 ? kCp1252High[c - 0x80] : c;
+        } else if (c >= 0x80 && codecP != 0) {
+            UInt32 cp = CharForPalm(codecP, p, size);
             ok = cp == 0 || AppendUtf8(dstP, capacity, lengthP, cp);
         } else {
             ok = PutChar(dstP, capacity, lengthP, (Char)c);
@@ -238,14 +362,19 @@ static Boolean FileNameChar(Char c)
 }
 
 void TextFileName(const Char *titleP, const Char *fallbackP,
-                  const Char *extensionP, Char *dstP, UInt16 capacity)
+                  const Char *extensionP, Char *dstP, UInt16 capacity,
+                  const TextCodec *codecP)
 {
-    UInt16 length = 0;
+    UInt16 length = 0, size;
     UInt16 limit = (UInt16)(capacity - StrLen(extensionP) - 1);
     if (limit > FILE_NAME_MAX_TITLE) limit = FILE_NAME_MAX_TITLE;
     dstP[0] = '\0';
-    for (; *titleP != '\0' && length < limit; titleP++) {
-        Char c = FileNameChar(*titleP) ? *titleP : '_';
+    for (; *titleP != '\0' && length < limit; titleP += size) {
+        Char c;
+        /* A Japanese character's second byte can look like ASCII. */
+        size = codecP != 0
+            ? PalmCharSize(codecP->encoding, (const UInt8 *)titleP) : 1;
+        c = size == 1 && FileNameChar(*titleP) ? *titleP : '_';
         if ((c == ' ' || c == '_') &&
             (length == 0 || dstP[length - 1] == ' ' || dstP[length - 1] == '_'))
             continue;

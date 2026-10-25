@@ -92,7 +92,8 @@ If YouTube says "Sign in to confirm you're not a bot", try again, or use
 - 144p only, and only videos that offer H.264 and AAC streams.
 - No live streams, "made for kids", age-restricted or members-only videos.
 - Titles are converted to the Palm's Latin-1 text; Cyrillic is
-  transliterated.
+  transliterated. With CJKOS on, set to Shift-JIS, titles and searches are
+  in Japanese instead.
 - Merging runs in one go and cannot be cancelled.
 - The built-in player cannot seek yet.
 

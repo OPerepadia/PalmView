@@ -8,6 +8,7 @@
 #include "yt_api.h"
 
 static int gFailures;
+static const TextCodec kWestern = { textWestern, 0, 0 };
 
 static void ExpectText(const char *nameP, const char *actualP,
                        const char *expectedP)
@@ -29,24 +30,24 @@ static void TestUtf8ToPalm(void)
 {
     Char out[64];
     const char *srcP = "Caf\xC3\xA9 \xE2\x80\x9Cquoted\xE2\x80\x9D \xE2\x82\xAC" "5";
-    TextUtf8ToPalm(srcP, (UInt16)strlen(srcP), out, sizeof(out));
+    TextUtf8ToPalm(srcP, (UInt16)strlen(srcP), out, sizeof(out), 0);
     ExpectText("latin and cp1252 punctuation", out,
         "Caf\xE9 \x93quoted\x94 \x80" "5");
 
     srcP = "\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD1\x96\xD1\x82 "
         "\xD0\xA9\xD0\xB5 \xD0\x87\xD0\xB6\xD0\xB0";
-    TextUtf8ToPalm(srcP, (UInt16)strlen(srcP), out, sizeof(out));
+    TextUtf8ToPalm(srcP, (UInt16)strlen(srcP), out, sizeof(out), 0);
     ExpectText("cyrillic transliteration", out, "Pryvit Shche Yizha");
 
     srcP = "Hi \xF0\x9F\x98\x80\xEF\xB8\x8F there \xE4\xB8\xAD\xE6\x96\x87!";
-    TextUtf8ToPalm(srcP, (UInt16)strlen(srcP), out, sizeof(out));
+    TextUtf8ToPalm(srcP, (UInt16)strlen(srcP), out, sizeof(out), 0);
     ExpectText("emoji dropped, unknown collapsed", out, "Hi  there ?!");
 
     srcP = "\xFF\xC3";
-    TextUtf8ToPalm(srcP, (UInt16)strlen(srcP), out, sizeof(out));
+    TextUtf8ToPalm(srcP, (UInt16)strlen(srcP), out, sizeof(out), 0);
     ExpectText("invalid UTF-8", out, "?");
 
-    TextUtf8ToPalm("abcdefgh", 8, out, 5);
+    TextUtf8ToPalm("abcdefgh", 8, out, 5, 0);
     ExpectText("truncation", out, "abcd");
 }
 
@@ -56,24 +57,89 @@ static void TestJsonEscape(void)
     UInt16 length = 0;
     out[0] = '\0';
     Expect("json escape fits",
-        TextAppendJson(out, sizeof(out), &length, "a\"b\\c\n\xE9\x80", true));
+        TextAppendJson(out, sizeof(out), &length, "a\"b\\c\n\xE9\x80", &kWestern));
     ExpectText("json escape", out, "a\\\"b\\\\c\\u000a\xC3\xA9\xE2\x82\xAC");
     length = 0;
     out[0] = '\0';
     Expect("json escape overflow",
-        !TextAppendJson(out, 4, &length, "abcdef", false));
+        !TextAppendJson(out, 4, &length, "abcdef", 0));
+}
+
+/* Japanese with CJKOS, using the table in build/host/jis.bin */
+static void TestJapanese(void)
+{
+    static UInt8 table[48 * 1024];
+    TextCodec sjis;
+    Char out[64], json[64];
+    UInt16 length;
+    UInt32 i, mismatches = 0;
+    FILE *fileP = fopen("build/host/jis.bin", "rb");
+    size_t size;
+    if (fileP == 0) {
+        Expect("jis.bin missing", 0);
+        return;
+    }
+    size = fread(table, 1, sizeof(table), fileP);
+    fclose(fileP);
+    sjis.encoding = textShiftJis;
+    sjis.jisP = table;
+    sjis.jisCount = (UInt16)(size / 4);
+
+    TextUtf8ToPalm("Everybody\xE2\x80\x99s caf\xC3\xA9", 19, out, sizeof(out),
+        &sjis);
+    ExpectText("japanese punctuation and accents", out, "Everybody's cafe");
+    TextUtf8ToPalm("\xE9\xAC\xBC\xE9\xA6\x96 \xEF\xBD\xB1", 10, out, sizeof(out),
+        &sjis);
+    ExpectText("shift-jis", out, "\x8B\x53\x8E\xF1 \xB1");
+    TextUtf8ToPalm("\xD0\x9F\xD1\x80 \xEA\xB0\x80", 8, out, sizeof(out),
+        &sjis);
+    ExpectText("japanese keeps transliteration", out, "Pr ?");
+    TextUtf8ToPalm("ab\xE9\xAC\xBC", 5, out, 4, &sjis);
+    ExpectText("no half character at the end", out, "ab");
+
+    length = 0;
+    json[0] = '\0';
+    TextAppendJson(json, sizeof(json), &length, "\x95\x5C\\", &sjis);
+    ExpectText("shift-jis trail byte is not a backslash", json,
+        "\xE8\xA1\xA8\\\\");
+    TextFileName("\x8B\x53" "Song", "id", ".mp4", out, sizeof(out), &sjis);
+    ExpectText("japanese file name", out, "Song.mp4");
+    Expect("char start", TextCharStart(&sjis, "a\x95\x5C" "b", 2) == 1 &&
+        TextCharStart(&sjis, "a\x95\x5C" "b", 3) == 3 &&
+        TextCharStart(0, "a\x95\x5C" "b", 2) == 2);
+
+    /* Every code survives the trip back to UTF-8, as searches take it. A
+     * few characters share a code, so the character itself may change. */
+    for (i = 0; i < sjis.jisCount; i++) {
+        UInt16 cp = (UInt16)((table[i * 4] << 8) | table[i * 4 + 1]);
+        Char utf8[8];
+        utf8[0] = (Char)(cp < 0x800 ? 0xC0 | (cp >> 6) : 0xE0 | (cp >> 12));
+        utf8[1] = (Char)(cp < 0x800 ? 0x80 | (cp & 0x3F)
+            : 0x80 | ((cp >> 6) & 0x3F));
+        utf8[2] = (Char)(cp < 0x800 ? '\0' : 0x80 | (cp & 0x3F));
+        utf8[3] = '\0';
+        TextUtf8ToPalm(utf8, cp < 0x800 ? 2 : 3, out, sizeof(out), &sjis);
+        if (out[0] == '?' || (UInt8)out[0] < 0x80) continue;
+        length = 0;
+        json[0] = '\0';
+        TextAppendJson(json, sizeof(json), &length, out, &sjis);
+        TextUtf8ToPalm(json, length, utf8, sizeof(utf8), &sjis);
+        /* Unless it is punctuation that deliberately becomes ASCII */
+        if (strcmp(utf8, out) != 0 && (UInt8)utf8[0] >= 0x80) mismatches++;
+    }
+    Expect("shift-jis round trip", mismatches == 0);
 }
 
 static void TestFileName(void)
 {
     Char out[40];
     TextFileName("Rick Astley - Never Gonna Give You Up (Official Video)",
-        "dQw4w9WgXcQ", ".mp4", out, sizeof(out));
+        "dQw4w9WgXcQ", ".mp4", out, sizeof(out), 0);
     ExpectText("file name truncated to capacity", out,
         "Rick Astley - Never Gonna Give You.mp4");
-    TextFileName("a/b:c*?\"<>|  d.", "id", ".mp4", out, sizeof(out));
+    TextFileName("a/b:c*?\"<>|  d.", "id", ".mp4", out, sizeof(out), 0);
     ExpectText("file name sanitized", out, "a_b_c_d.mp4");
-    TextFileName("???", "VIDEOID", ".mp4", out, sizeof(out));
+    TextFileName("???", "VIDEOID", ".mp4", out, sizeof(out), 0);
     ExpectText("file name fallback", out, "VIDEOID.mp4");
 }
 
@@ -187,7 +253,7 @@ static void TestApiRequests(void)
     const char *bodyP;
     UInt16 length;
     YtClientDefaults(&client);
-    length = YtBuildSearchRequest(&client, "", "caf\xE9 \"x\"", body, request,
+    length = YtBuildSearchRequest(&client, "", "caf\xE9 \"x\"", &kWestern, body, request,
         sizeof(request));
     bodyP = strstr(request, "\r\n\r\n");
     Expect("search request built", length != 0 && bodyP != 0);
@@ -295,6 +361,7 @@ int main(void)
     TestUtf8ToPalm();
     TestJsonEscape();
     TestFileName();
+    TestJapanese();
     TestShorten();
     TestClientParse();
     TestUrls();

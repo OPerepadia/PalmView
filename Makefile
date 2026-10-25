@@ -149,6 +149,11 @@ $(TJPGD)/tjpgd.c $(TJPGD)/tjpgd.h: $(TJPGD)/%: $(DEPS)/tjpgd/src/% | $(TJPGD)
 	cp $< $@
 $(TJPGD)/tjpgdcnf.h: src/core/tjpgdcnf.h | $(TJPGD)
 	cp $< $@
+# Unicode to Shift-JIS, for Japanese text with CJKOS
+$(BUILD_DIR)/jis.bin $(HOST_DIR)/jis.bin: tools/jis-table.py
+	@mkdir -p $(dir $@)
+	python3 -I tools/jis-table.py $@
+
 $(BUILD_DIR)/tjpgd.o: $(TJPGD_FILES) | $(BUILD_DIR)
 	$(CC) $(COMMON_FLAGS) $(PROFILE_FLAGS) -c $< -o $@
 $(BUILD_DIR)/core/thumb.o: $(TJPGD_FILES)
@@ -203,7 +208,7 @@ $(BUILD_DIR)/icon-color.bmp: src/palm/icon.svg | $(BUILD_DIR)
 $(BUILD_DIR)/icon-color-hd.bmp: src/palm/icon.svg | $(BUILD_DIR)
 	$(MAGICK) -background none -density 192 RSVG:$< $(ICON_EDGE) BMP3:$@
 
-$(PRC): $(CODE) $(CODE2) $(RELOCS) $(ICONS) \
+$(PRC): $(CODE) $(CODE2) $(RELOCS) $(ICONS) $(BUILD_DIR)/jis.bin \
 		$(RESOURCE_RCP) src/palm/resource.h certs/google.pem app.mk
 	cd $(BUILD_DIR) && $(PILRC) -ro -o $(BASE_RO) -creator $(APP_CREATOR) \
 		-type $(APP_TYPE) -name '$(APP_NAME)' -I $(ROOT)/src/palm $(RESOURCE_RCP)
@@ -287,7 +292,7 @@ $(JSON_DUMP): host/tests/json_dump.c src/core/json_scan.c src/core/json_scan.h \
 	$(HOST_CC) $(HOST_FLAGS) host/tests/json_dump.c src/core/json_scan.c -o $@
 
 $(UNIT_TESTS): host/tests/unit_tests.c $(HOST_SOURCES) $(TJPGD_FILES) \
-		$(wildcard src/core/*.h) host/shim/PalmOS.h | $(HOST_DIR)
+		$(wildcard src/core/*.h) host/shim/PalmOS.h $(HOST_DIR)/jis.bin | $(HOST_DIR)
 	$(HOST_CC) $(HOST_FLAGS) host/tests/unit_tests.c $(HOST_SOURCES) -o $@
 
 $(STREAM_TEST): host/tests/stream_test.c $(HOST_SOURCES) $(TJPGD_FILES) \

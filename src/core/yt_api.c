@@ -88,7 +88,7 @@ static Boolean AppendJsonPair(Char *bodyP, UInt16 *lengthP, const Char *keyP,
         TextAppend(bodyP, YT_BODY_CAPACITY, lengthP, "\"") &&
         TextAppend(bodyP, YT_BODY_CAPACITY, lengthP, keyP) &&
         TextAppend(bodyP, YT_BODY_CAPACITY, lengthP, "\":\"") &&
-        TextAppendJson(bodyP, YT_BODY_CAPACITY, lengthP, valueP, false) &&
+        TextAppendJson(bodyP, YT_BODY_CAPACITY, lengthP, valueP, 0) &&
         TextAppend(bodyP, YT_BODY_CAPACITY, lengthP, "\"");
 }
 
@@ -173,13 +173,14 @@ UInt16 YtBuildPlayerRequest(const YtClient *clientP, const Char *visitorP,
 }
 
 UInt16 YtBuildSearchRequest(const YtClient *clientP, const Char *visitorP,
-                            const Char *queryP, Char *bodyP,
-                            Char *requestP, UInt16 capacity)
+                            const Char *queryP, const TextCodec *codecP,
+                            Char *bodyP, Char *requestP, UInt16 capacity)
 {
     UInt16 bodyLength = 0;
     if (!AppendContext(clientP, visitorP, bodyP, &bodyLength) ||
         !TextAppend(bodyP, YT_BODY_CAPACITY, &bodyLength, ",\"query\":\"") ||
-        !TextAppendJson(bodyP, YT_BODY_CAPACITY, &bodyLength, queryP, true) ||
+        !TextAppendJson(bodyP, YT_BODY_CAPACITY, &bodyLength, queryP,
+            codecP) ||
         !TextAppend(bodyP, YT_BODY_CAPACITY, &bodyLength, "\"}"))
         return 0;
     return BuildPost(clientP, visitorP,
@@ -303,10 +304,11 @@ static void ResetCurrentFormat(YtPlayer *p)
 }
 
 void YtPlayerInit(YtPlayer *playerP, const UInt16 *videoItagsP,
-                  const UInt16 *audioItagsP)
+                  const UInt16 *audioItagsP, const TextCodec *codecP)
 {
     UInt16 i;
     MemSet(playerP, sizeof(*playerP), 0);
+    playerP->codecP = codecP;
     for (i = 0; i < YT_MAX_ITAG_CHOICES && videoItagsP[i] != 0; i++)
         playerP->videoItags[i] = videoItagsP[i];
     for (i = 0; i < YT_MAX_ITAG_CHOICES && audioItagsP[i] != 0; i++)
@@ -348,11 +350,11 @@ Boolean YtPlayerValue(void *contextP, const JsonScanner *s, UInt16 type,
     } else if (JsonPathIs(s, "playabilityStatus/status")) {
         CopyField(p->status, sizeof(p->status), textP);
     } else if (JsonPathIs(s, "playabilityStatus/reason")) {
-        TextUtf8ToPalm(textP, length, p->reason, sizeof(p->reason));
+        TextUtf8ToPalm(textP, length, p->reason, sizeof(p->reason), p->codecP);
     } else if (JsonPathIs(s, "videoDetails/title")) {
-        TextUtf8ToPalm(textP, length, p->title, sizeof(p->title));
+        TextUtf8ToPalm(textP, length, p->title, sizeof(p->title), p->codecP);
     } else if (JsonPathIs(s, "videoDetails/author")) {
-        TextUtf8ToPalm(textP, length, p->author, sizeof(p->author));
+        TextUtf8ToPalm(textP, length, p->author, sizeof(p->author), p->codecP);
     } else if (JsonPathIs(s, "videoDetails/lengthSeconds")) {
         TextParseUInt32(textP, &p->lengthSeconds);
     } else if (JsonPathIs(s, "videoDetails/isLive")) {
@@ -399,9 +401,10 @@ Boolean YtPlayerPlayable(const YtPlayer *playerP)
 
 /* Search responses */
 
-void YtSearchInit(YtSearch *searchP)
+void YtSearchInit(YtSearch *searchP, const TextCodec *codecP)
 {
     MemSet(searchP, sizeof(*searchP), 0);
+    searchP->codecP = codecP;
 }
 
 /* Level just below the innermost video renderer key, or 0 if none. */
@@ -439,12 +442,13 @@ static Boolean TextField(const JsonScanner *s, UInt16 level,
     return false;
 }
 
-static void SetText(Char *dstP, UInt16 capacity, const Char *textP,
-                    UInt16 length, Boolean replace)
+static void SetText(const TextCodec *codecP, Char *dstP, UInt16 capacity,
+                    const Char *textP, UInt16 length, Boolean replace)
 {
     UInt16 used = replace ? 0 : StrLen(dstP);
     if (used + 1 >= capacity) return;
-    TextUtf8ToPalm(textP, length, dstP + used, (UInt16)(capacity - used));
+    TextUtf8ToPalm(textP, length, dstP + used, (UInt16)(capacity - used),
+        codecP);
 }
 
 Boolean YtSearchValue(void *contextP, const JsonScanner *s, UInt16 type,
@@ -466,18 +470,18 @@ Boolean YtSearchValue(void *contextP, const JsonScanner *s, UInt16 type,
         CopyField(itemP->videoId, sizeof(itemP->videoId), textP);
     } else if (TextField(s, level, "title", &first)) {
         /* Titles can be split into several runs; join them. */
-        SetText(itemP->title, sizeof(itemP->title), textP, length, first);
+        SetText(searchP->codecP, itemP->title, sizeof(itemP->title), textP, length, first);
     } else if (TextField(s, level, "longBylineText", &first)) {
-        if (first) SetText(itemP->channel, sizeof(itemP->channel), textP,
+        if (first) SetText(searchP->codecP, itemP->channel, sizeof(itemP->channel), textP,
             length, true);
     } else if (TextField(s, level, "lengthText", &first)) {
-        if (first) SetText(itemP->length, sizeof(itemP->length), textP,
+        if (first) SetText(searchP->codecP, itemP->length, sizeof(itemP->length), textP,
             length, true);
     } else if (TextField(s, level, "publishedTimeText", &first)) {
-        if (first) SetText(itemP->published, sizeof(itemP->published),
+        if (first) SetText(searchP->codecP, itemP->published, sizeof(itemP->published),
             textP, length, true);
     } else if (TextField(s, level, "shortViewCountText", &first)) {
-        if (first) SetText(itemP->views, sizeof(itemP->views), textP, length,
+        if (first) SetText(searchP->codecP, itemP->views, sizeof(itemP->views), textP, length,
             true);
     } else if (JsonPathFrom(s, level, "badges/#/metadataBadgeRenderer/label") ||
                JsonPathFrom(s, level,

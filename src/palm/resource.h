@@ -46,6 +46,7 @@
 #define RomIncompatibleAlert 1302
 
 #define TrustCertificates 1000
+#define JisTable 1000
 #define AppIcon 1000
 #define AppVersionString 1000
 

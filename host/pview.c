@@ -170,8 +170,8 @@ static int Search(const char *queryP)
     static Char request[YT_REQUEST_CAPACITY], body[YT_BODY_CAPACITY];
     static YtSearch search;
     UInt16 i;
-    YtSearchInit(&search);
-    if (!ApiCall(request, YtBuildSearchRequest(&gClient, gVisitor, queryP,
+    YtSearchInit(&search, 0);
+    if (!ApiCall(request, YtBuildSearchRequest(&gClient, gVisitor, queryP, 0,
             body, request, sizeof(request)), YtSearchValue, YtSearchEnd,
             &search)) return 1;
     SaveVisitor(search.visitor);
@@ -187,7 +187,7 @@ static int Search(const char *queryP)
 static Boolean LoadPlayer(const char *videoIdP, YtPlayer *playerP)
 {
     static Char request[YT_REQUEST_CAPACITY], body[YT_BODY_CAPACITY];
-    YtPlayerInit(playerP, kVideoItags, kAudioItags);
+    YtPlayerInit(playerP, kVideoItags, kAudioItags, 0);
     if (!ApiCall(request, YtBuildPlayerRequest(&gClient, gVisitor, videoIdP,
             body, request, sizeof(request)), YtPlayerValue, YtPlayerEnd,
             playerP)) return false;
@@ -318,7 +318,7 @@ static int Get(const char *videoIdP, const char *dirP)
     }
     snprintf(videoPath, sizeof(videoPath), "%s/%s.video.mp4", dirP, videoIdP);
     snprintf(audioPath, sizeof(audioPath), "%s/%s.audio.mp4", dirP, videoIdP);
-    TextFileName(player.title, videoIdP, ".mp4", name, sizeof(name));
+    TextFileName(player.title, videoIdP, ".mp4", name, sizeof(name), 0);
     snprintf(outPath, sizeof(outPath), "%s/%s", dirP, name);
     if (!Download(&player.video, videoPath) ||
         !Download(&player.audio, audioPath)) return 1;

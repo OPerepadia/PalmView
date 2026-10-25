@@ -5,17 +5,37 @@
 
 #include <PalmOS.h>
 
-/* Converts UTF-8 to the Palm's Windows-1252 text. Cyrillic is
- * transliterated; other unsupported characters become '?'. Returns the
- * output length. The output is always NUL-terminated. */
+/* How the Palm shows text: Windows-1252, or Shift-JIS with CJKOS */
+enum { textWestern = 0, textShiftJis, textAscii };
+
+/* Palm text in an encoding. Shift-JIS needs the table that
+ * tools/jis-table.py builds: jisCount entries of 4 bytes. A 0 codec
+ * means Western. */
+typedef struct TextCodec {
+    UInt16 encoding;
+    const UInt8 *jisP;
+    UInt16 jisCount;
+} TextCodec;
+
+/* Converts UTF-8 to Palm text. Cyrillic is transliterated. In Japanese,
+ * curly quotes and dashes become ASCII and accented letters lose their
+ * accents. Other unsupported characters become '?'. Returns the output
+ * length. The output is always NUL-terminated. */
 UInt16 TextUtf8ToPalm(const Char *srcP, UInt16 srcLength, Char *dstP,
-                      UInt16 capacity);
+                      UInt16 capacity, const TextCodec *codecP);
 
 /* Appends srcP to a buffer as UTF-8 JSON string content (no quotes). The
- * source is Windows-1252 when fromPalm is true, otherwise UTF-8/ASCII.
- * Returns false if it does not fit. */
+ * source is Palm text in codecP, or UTF-8 when codecP is 0. Returns false
+ * if it does not fit. */
 Boolean TextAppendJson(Char *dstP, UInt16 capacity, UInt16 *lengthP,
-                       const Char *srcP, Boolean fromPalm);
+                       const Char *srcP, const TextCodec *codecP);
+
+/* The start of the character at or before offset, so a cut there does not
+ * split a Japanese character. */
+UInt16 TextCharStart(const TextCodec *codecP, const Char *textP,
+                     UInt16 offset);
+/* "..." as one character in the codec, or three dots without one */
+const Char *TextEllipsis(const TextCodec *codecP);
 
 /* Appends a literal string. Returns false if it does not fit. */
 Boolean TextAppend(Char *dstP, UInt16 capacity, UInt16 *lengthP,
@@ -31,8 +51,9 @@ Boolean TextParseUInt32(const Char *textP, UInt32 *valueP);
  * such as "No views", is copied as it is. */
 void TextShorten(const Char *srcP, Char *dstP, UInt16 capacity);
 
-/* Makes a FAT-safe ASCII file name from a Palm-encoded title. */
+/* Makes a FAT-safe ASCII file name from a title in codecP. */
 void TextFileName(const Char *titleP, const Char *fallbackP,
-                  const Char *extensionP, Char *dstP, UInt16 capacity);
+                  const Char *extensionP, Char *dstP, UInt16 capacity,
+                  const TextCodec *codecP);
 
 #endif
