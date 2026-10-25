@@ -232,7 +232,7 @@ UInt16 YtBuildMediaRequest(const YtClient *clientP, const Char *urlP,
 }
 
 UInt16 YtBuildThumbRequest(const YtClient *clientP, const Char *videoIdP,
-                           Char *requestP, UInt16 capacity)
+                           Boolean keepAlive, Char *requestP, UInt16 capacity)
 {
     UInt16 length = 0;
     Boolean ok = TextAppend(requestP, capacity, &length, "GET /vi/") &&
@@ -241,8 +241,9 @@ UInt16 YtBuildThumbRequest(const YtClient *clientP, const Char *videoIdP,
             "/default.jpg HTTP/1.1\r\nHost: " YT_THUMB_HOST "\r\nUser-Agent: ") &&
         TextAppend(requestP, capacity, &length, clientP->userAgent) &&
         TextAppend(requestP, capacity, &length,
-            "\r\nAccept: */*\r\nAccept-Encoding: identity\r\n"
-            "Connection: close\r\n\r\n");
+            "\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: ") &&
+        TextAppend(requestP, capacity, &length,
+            keepAlive ? "keep-alive\r\n\r\n" : "close\r\n\r\n");
     return ok ? length : 0;
 }
 

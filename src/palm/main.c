@@ -68,8 +68,19 @@ typedef enum Task {
     taskSearch,
     taskPlayer,
     taskDownload,
-    taskThumb           /* in the background: Play and Download stop it */
+    taskThumbs          /* in the background: anything else stops it */
 } Task;
+
+/* A search result's thumbnail */
+typedef struct Thumb {
+    UInt8 *jpegP;               /* once downloaded */
+    UInt16 length;
+    UInt8 state;
+    BitmapType *bitsP;          /* the list's half-size pixels */
+    BitmapType *bitmapP;        /* the same, drawn at double density */
+} Thumb;
+
+enum { thumbMissing = 0, thumbLoaded, thumbFailed };
 
 typedef struct AppPrefs {
     Char visitor[YT_VISITOR_CAPACITY];
@@ -104,10 +115,12 @@ typedef struct AppState {
     NetJobResult jobResult;
     UInt16 task;
     UInt32 taskStartTicks;
-    UInt8 *thumbJpegP;          /* while the thumbnail downloads */
+    Thumb thumbs[YT_SEARCH_MAX];
+    UInt8 *thumbBufferP;        /* while thumbnails download */
     UInt16 thumbLength;
-    BitmapType *thumbBitsP;     /* the decoded pixels */
-    BitmapType *thumbP;         /* the same, drawn at double density */
+    UInt16 thumbItem;           /* the one downloading, or NO_RESULT */
+    BitmapType *detailBitsP;    /* the selected video's, full size */
+    BitmapType *detailThumbP;
 
     UInt16 volume;
     UInt16 stream;
@@ -143,6 +156,7 @@ typedef struct AppState {
     Boolean prefsChanged;       /* saved when the app stops */
     UInt32 lastCentre;          /* ticks of the last 5-way centre press */
     UInt32 lastSkip;            /* and of the last left or right one */
+    UInt32 lastInputTicks;      /* of the last pen, key or scroll event */
     Boolean seekDragging;       /* the pen is on the seek bar */
     Boolean volumeDragging;     /* or on the volume bars */
     Boolean skipPending;        /* 5-way presses not applied yet */
@@ -482,6 +496,86 @@ static Boolean StartApiJob(AppState *s, UInt16 task, UInt16 requestLength)
     return false;
 }
 
+/* Thumbnails */
+
+static void StartThumbs(AppState *s);
+
+/* Decodes a thumbnail into a bitmap drawn at double density. *bitsPP gets
+ * the bitmap that holds its pixels. Returns 0 if it cannot. */
+static BitmapType *DecodeThumb(const Thumb *thumbP, Boolean small,
+                               BitmapType **bitsPP)
+{
+    Coord width = small ? THUMB_SMALL_WIDTH : THUMB_WIDTH;
+    Coord height = small ? THUMB_SMALL_HEIGHT : THUMB_HEIGHT;
+    void *workP = MemPtrNew(THUMB_WORK_SIZE);
+    BitmapType *bitsP = 0, *bitmapP = 0;
+    Coord bitsWidth, bitsHeight;
+    UInt16 rowBytes, error;
+    if (workP != 0 && (bitsP = BmpCreate(width, height, 16, 0, &error)) != 0) {
+        BmpGetDimensions(bitsP, &bitsWidth, &bitsHeight, &rowBytes);
+        if (rowBytes == (UInt16)(width * 2) && ThumbDecode(thumbP->jpegP, thumbP->length,
+                (UInt16 *)BmpGetBits(bitsP), workP, small))
+            bitmapP = (BitmapType *)BmpCreateBitmapV3(bitsP, kDensityDouble,
+                BmpGetBits(bitsP), 0);
+        if (bitmapP == 0) {
+            BmpDelete(bitsP);
+            bitsP = 0;
+        }
+    }
+    if (workP != 0) MemPtrFree(workP);
+    *bitsPP = bitsP;
+    return bitmapP;
+}
+
+static void FreeBitmap(BitmapType **bitmapPP, BitmapType **bitsPP)
+{
+    if (*bitmapPP != 0) BmpDelete(*bitmapPP);
+    if (*bitsPP != 0) BmpDelete(*bitsPP);
+    *bitmapPP = 0;
+    *bitsPP = 0;
+}
+
+/* Stops downloading thumbnails; StartThumbs carries on later. */
+static void StopThumbs(AppState *s)
+{
+    if (s->task == taskThumbs) {
+        if (s->jobP != 0) {
+            NetJobCancel(s->jobP);
+            while (s->jobP != 0) NetJobStep(&s->jobP);
+        }
+        s->task = taskIdle;
+    }
+    s->thumbItem = NO_RESULT;
+    if (s->thumbBufferP != 0) MemPtrFree(s->thumbBufferP);
+    s->thumbBufferP = 0;
+}
+
+/* Heap the thumbnails hold, for the log */
+static UInt32 ThumbBytes(const AppState *s)
+{
+    UInt32 total = s->detailThumbP != 0 ? THUMB_WIDTH * THUMB_HEIGHT * 2UL : 0;
+    UInt16 i;
+    for (i = 0; i < YT_SEARCH_MAX; i++) {
+        total += s->thumbs[i].length;
+        if (s->thumbs[i].bitmapP != 0)
+            total += THUMB_SMALL_WIDTH * THUMB_SMALL_HEIGHT * 2UL;
+    }
+    return total;
+}
+
+static void FreeThumbs(AppState *s)
+{
+    UInt16 i;
+    StopThumbs(s);
+    for (i = 0; i < YT_SEARCH_MAX; i++) {
+        Thumb *thumbP = &s->thumbs[i];
+        if (thumbP->jpegP != 0) MemPtrFree(thumbP->jpegP);
+        FreeBitmap(&thumbP->bitmapP, &thumbP->bitsP);
+        MemSet(thumbP, sizeof(*thumbP), 0);
+    }
+    FreeBitmap(&s->detailThumbP, &s->detailBitsP);
+}
+
 /* Main form */
 
 static void GetResultBounds(RectangleType *boundsP)
@@ -504,17 +598,20 @@ static void AppendShort(Char *lineP, UInt16 capacity, const Char *textP)
     AppendDetail(lineP, capacity, text);
 }
 
-/* A result in two lines: the title, then "1.8B · 10y ago · Channel".
- * Drawn in native pixels for a hairline under each result. */
+/* A result: its thumbnail, or a gray box until it arrives, then two lines:
+ * the title and "1.8B · 10y ago · Channel". Drawn in native pixels for a
+ * hairline under each result. */
 static void DrawResultRow(const AppState *s, UInt16 row)
 {
     static const RGBColorType kText = { 0, 0x00, 0x00, 0x00 };
     static const RGBColorType kDetails = { 0, 0x80, 0x80, 0x80 };
     static const RGBColorType kLine = { 0, 0xC8, 0xC8, 0xC8 };
     static const RGBColorType kFocus = { 0, 0xC8, 0xDC, 0xF8 };
+    static const RGBColorType kPlaceholder = { 0, 0xE0, 0xE0, 0xE0 };
     UInt16 item = s->resultTop + row;
     const YtSearchItem *itemP = &s->searchP->items[item];
-    RectangleType bounds;
+    const Thumb *thumbP = &s->thumbs[item];
+    RectangleType bounds, thumb;
     UInt16 coordinates;
     Coord margin, lineHeight, width, bottom;
     Char line[80];
@@ -544,8 +641,18 @@ static void DrawResultRow(const AppState *s, UInt16 row)
         FntSetFont(stdFont);
         lineHeight = FntLineHeight();
         margin = WinScaleCoord(2, false);
-        width = bounds.extent.x - 2 * margin;
-        bounds.topLeft.x += margin;
+        RctSetRectangle(&thumb, bounds.topLeft.x + margin, bounds.topLeft.y +
+            (bounds.extent.y - THUMB_SMALL_HEIGHT) / 2, THUMB_SMALL_WIDTH,
+            THUMB_SMALL_HEIGHT);
+        if (thumbP->bitmapP != 0) {
+            WinDrawBitmap(thumbP->bitmapP, thumb.topLeft.x, thumb.topLeft.y);
+        } else {
+            WinSetForeColorRGB(&kPlaceholder, 0);
+            WinDrawRectangle(&thumb, 0);
+        }
+        width = bounds.topLeft.x + bounds.extent.x - margin;
+        bounds.topLeft.x = thumb.topLeft.x + thumb.extent.x + 2 * margin;
+        width -= bounds.topLeft.x;
         bounds.topLeft.y += (bounds.extent.y - 2 * lineHeight) / 2;
         WinSetTextColorRGB(&kText, 0);
         WinDrawTruncChars(itemP->title, StrLen(itemP->title),
@@ -613,6 +720,7 @@ static void MoveResultFocus(AppState *s, Int16 rows)
 
 static void OpenResult(AppState *s, UInt16 item)
 {
+    StopThumbs(s);
     if (s->task != taskIdle || item >= s->searchP->count) return;
     if (s->searchP->items[item].live) {
         SetStatus(s, "Live streams are not supported.");
@@ -725,8 +833,10 @@ static void StartSearch(AppState *s)
 {
     FieldType *fieldP = (FieldType *)GetObject(SearchField);
     const Char *queryP = FldGetTextPtr(fieldP);
+    StopThumbs(s);
     if (s->task != taskIdle || queryP == 0 || queryP[0] == '\0') return;
     RememberSearch(s, queryP);
+    FreeThumbs(s);
     YtSearchInit(s->searchP);
     s->resultTop = 0;
     s->resultFocus = NO_RESULT;
@@ -757,6 +867,7 @@ static void FinishSearch(AppState *s)
     AppendSeconds(message, sizeof(message), TimGetTicks() - s->taskStartTicks);
     SetStatus(s, s->searchP->count == 0 ? "No results." : message);
     if (OnForm(MainForm)) ShowResults(s, true);
+    StartThumbs(s);
 }
 
 /* Detail form */
@@ -838,73 +949,15 @@ static void BuildInfo(AppState *s)
     }
 }
 
-/* Thumbnail */
+/* Thumbnail downloads */
 
 static Int16 FeedThumb(void *contextP, const UInt8 *dataP, UInt16 length)
 {
     AppState *s = (AppState *)contextP;
     if (length > THUMB_JPEG_CAPACITY - s->thumbLength) return 1;
-    MemMove(s->thumbJpegP + s->thumbLength, dataP, length);
+    MemMove(s->thumbBufferP + s->thumbLength, dataP, length);
     s->thumbLength += length;
     return 0;
-}
-
-static void FreeThumb(AppState *s)
-{
-    if (s->thumbJpegP != 0) MemPtrFree(s->thumbJpegP);
-    s->thumbJpegP = 0;
-    if (s->thumbP != 0) BmpDelete(s->thumbP);
-    s->thumbP = 0;
-    if (s->thumbBitsP != 0) BmpDelete(s->thumbBitsP);
-    s->thumbBitsP = 0;
-}
-
-/* Fetches the selected video's thumbnail, after its stream info. */
-static void StartThumb(AppState *s)
-{
-    UInt16 length;
-    FreeThumb(s);
-    s->thumbJpegP = (UInt8 *)MemPtrNew(THUMB_JPEG_CAPACITY);
-    s->thumbLength = 0;
-    length = YtBuildThumbRequest(&s->client,
-        s->searchP->items[s->selected].videoId, s->request, sizeof(s->request));
-    StrCopy(s->host, YT_THUMB_HOST);
-    if (s->thumbJpegP != 0 && length != 0 && NetJobStart(&s->jobP,
-            &s->netConfig, s->host, s->request, length, FeedThumb, s,
-            &s->jobResult))
-        s->task = taskThumb;
-    else
-        FreeThumb(s);
-}
-
-static void StopThumb(AppState *s)
-{
-    if (s->task != taskThumb) return;
-    if (s->jobP != 0) {
-        NetJobCancel(s->jobP);
-        while (s->jobP != 0) NetJobStep(&s->jobP);
-    }
-    s->task = taskIdle;
-    FreeThumb(s);
-}
-
-static void FinishThumb(AppState *s)
-{
-    void *workP = MemPtrNew(THUMB_WORK_SIZE);
-    Coord width, height;
-    UInt16 rowBytes, error;
-    if (s->jobResult.status == netJobOk && workP != 0 &&
-            (s->thumbBitsP = BmpCreate(THUMB_WIDTH, THUMB_HEIGHT, 16, 0,
-                &error)) != 0) {
-        BmpGetDimensions(s->thumbBitsP, &width, &height, &rowBytes);
-        if (rowBytes == THUMB_WIDTH * 2 && ThumbDecode(s->thumbJpegP,
-                s->thumbLength, (UInt16 *)BmpGetBits(s->thumbBitsP), workP))
-            s->thumbP = (BitmapType *)BmpCreateBitmapV3(s->thumbBitsP,
-                kDensityDouble, BmpGetBits(s->thumbBitsP), 0);
-    }
-    if (workP != 0) MemPtrFree(workP);
-    MemPtrFree(s->thumbJpegP);
-    s->thumbJpegP = 0;
 }
 
 /* A light gray box stands in until the thumbnail arrives, or if it
@@ -917,8 +970,8 @@ static void DrawThumb(const AppState *s)
     if (!OnForm(DetailForm)) return;
     formP = FrmGetActiveForm();
     FrmGetObjectBounds(formP, FrmGetObjectIndex(formP, ThumbGadget), &bounds);
-    if (s->thumbP != 0) {
-        WinDrawBitmap(s->thumbP, bounds.topLeft.x, bounds.topLeft.y);
+    if (s->detailThumbP != 0) {
+        WinDrawBitmap(s->detailThumbP, bounds.topLeft.x, bounds.topLeft.y);
         return;
     }
     WinPushDrawState();
@@ -927,9 +980,128 @@ static void DrawThumb(const AppState *s)
     WinPopDrawState();
 }
 
+/* The selected video's thumbnail at full size, from the list's JPEG */
+static void ShowDetailThumb(AppState *s)
+{
+    if (s->detailThumbP == 0 && s->thumbs[s->selected].state == thumbLoaded)
+        s->detailThumbP = DecodeThumb(&s->thumbs[s->selected], false,
+            &s->detailBitsP);
+    DrawThumb(s);
+}
+
+/* The thumbnail the screen needs next: the selected video's on the details
+ * screen, otherwise the results in view first. */
+static UInt16 NextThumb(const AppState *s)
+{
+    UInt16 count = s->searchP->count, i;
+    if (OnForm(DetailForm))
+        return s->thumbs[s->selected].state == thumbMissing
+            ? s->selected : NO_RESULT;
+    if (!OnForm(MainForm)) return NO_RESULT;
+    for (i = s->resultTop; i < s->resultTop + RESULT_ROWS && i < count; i++)
+        if (s->thumbs[i].state == thumbMissing) return i;
+    for (i = 0; i < count; i++)
+        if (s->thumbs[i].state == thumbMissing) return i;
+    return NO_RESULT;
+}
+
+/* Asks for a thumbnail on the open connection, or opens one. */
+static Boolean RequestThumb(AppState *s, UInt16 item)
+{
+    NetJobConfig config = s->netConfig;
+    UInt16 length = YtBuildThumbRequest(&s->client,
+        s->searchP->items[item].videoId, true, s->request, sizeof(s->request));
+    if (length == 0) return false;
+    s->thumbItem = item;
+    s->thumbLength = 0;
+    if (s->jobP != 0) return NetJobSend(s->jobP, s->request, length);
+    /* Polled, so the list scrolls freely meanwhile. */
+    config.keepAlive = true;
+    config.poll = true;
+    StrCopy(s->host, YT_THUMB_HOST);
+    return NetJobStart(&s->jobP, &config, s->host, s->request, length,
+        FeedThumb, s, &s->jobResult);
+}
+
+static void StartThumbs(AppState *s)
+{
+    UInt16 item = NextThumb(s);
+    if (s->task != taskIdle) return;
+    if (item == NO_RESULT) {
+        StopThumbs(s);
+        return;
+    }
+    if (s->thumbBufferP == 0)
+        s->thumbBufferP = (UInt8 *)MemPtrNew(THUMB_JPEG_CAPACITY);
+    if (s->thumbBufferP != 0 && RequestThumb(s, item)) {
+        s->task = taskThumbs;
+        return;
+    }
+    s->thumbs[item].state = thumbFailed;
+    StopThumbs(s);
+}
+
+/* Keeps the downloaded thumbnail and shows it where it belongs. */
+static void StoreThumb(AppState *s, UInt16 item)
+{
+    Thumb *thumbP = &s->thumbs[item];
+    thumbP->jpegP = (UInt8 *)MemPtrNew(s->thumbLength);
+    if (thumbP->jpegP != 0) {
+        MemMove(thumbP->jpegP, s->thumbBufferP, s->thumbLength);
+        thumbP->length = s->thumbLength;
+        thumbP->bitmapP = DecodeThumb(thumbP, true, &thumbP->bitsP);
+    }
+    if (thumbP->bitmapP == 0) {
+        if (thumbP->jpegP != 0) MemPtrFree(thumbP->jpegP);
+        thumbP->jpegP = 0;
+        thumbP->state = thumbFailed;
+        return;
+    }
+    thumbP->state = thumbLoaded;
+    if (OnForm(MainForm) && item >= s->resultTop &&
+            (UInt16)(item - s->resultTop) < RESULT_ROWS)
+        DrawResultRow(s, item - s->resultTop);
+    if (OnForm(DetailForm) && item == s->selected) ShowDetailThumb(s);
+}
+
+/* A thumbnail arrived and the connection stays open: ask for the next. */
+static void ThumbArrived(AppState *s)
+{
+    UInt16 next;
+    StoreThumb(s, s->thumbItem);
+    s->thumbItem = NO_RESULT;
+    next = NextThumb(s);
+    if (next == NO_RESULT || !RequestThumb(s, next)) {
+        s->thumbItem = NO_RESULT;
+        NetJobCancel(s->jobP);
+    }
+}
+
+/* The connection closed: after the last thumbnail, or a failure. */
+static void ThumbsEnded(AppState *s)
+{
+    UInt16 item = s->thumbItem, status = s->jobResult.status;
+    s->task = taskIdle;
+    s->thumbItem = NO_RESULT;
+    if (item != NO_RESULT) {
+        if (status == netJobOk) {
+            StoreThumb(s, item);
+        } else if (!s->jobResult.reused || s->jobResult.received != 0) {
+            s->thumbs[item].state = thumbFailed;
+            /* Without the network, the rest would fail one by one. */
+            if (status != netJobHttpError && status != netJobSinkError) {
+                StopThumbs(s);
+                return;
+            }
+        }
+        /* Otherwise the server closed the open connection: ask again. */
+    }
+    StartThumbs(s);
+}
+
 static void RefreshDetail(AppState *s)
 {
-    Boolean idle = s->task == taskIdle || s->task == taskThumb;
+    Boolean idle = s->task == taskIdle || s->task == taskThumbs;
     if (!OnForm(DetailForm)) return;
     SetFieldText(HeadField, s->head);
     SetFieldText(InfoField, s->info);
@@ -939,7 +1111,7 @@ static void RefreshDetail(AppState *s)
     ShowObject(CancelButton, !idle);
     ShowObject(PlayButton, idle && (s->saved || YtPlayerPlayable(s->playerP)));
     DrawProgressBar(s);
-    DrawThumb(s);
+    ShowDetailThumb(s);
 }
 
 static void MakeOutPath(AppState *s)
@@ -964,7 +1136,7 @@ static Boolean OutFileExists(AppState *s)
 static void StartPlayer(AppState *s)
 {
     const YtSearchItem *itemP = &s->searchP->items[s->selected];
-    FreeThumb(s);
+    FreeBitmap(&s->detailThumbP, &s->detailBitsP);
     YtPlayerInit(s->playerP, kVideoItags, kAudioItags);
     s->percent = 0;
     s->saved = false;
@@ -1132,7 +1304,7 @@ static void StartDownload(AppState *s)
     Char name[64];
     UInt32 freeBytes = 0, needed;
     Err error;
-    StopThumb(s);
+    StopThumbs(s);
     if (s->task != taskIdle || !YtPlayerPlayable(playerP)) return;
     error = StoreOpenVolume(&s->volume);
     if (error != errNone) {
@@ -1315,6 +1487,7 @@ static void ReturnFromSaved(AppState *s)
     if (s->savedNamesP != 0) MemPtrFree(s->savedNamesP);
     s->savedNamesP = 0;
     s->savedCount = 0;
+    StartThumbs(s);
 }
 
 /* Play form */
@@ -1641,6 +1814,17 @@ static void OpenPlayForm(AppState *s)
         ShowObject(PlayPauseButton, false);
         return;
     }
+    if (s->logP != 0) {
+        const Playback *p = s->playbackP;
+        UInt32 freeBytes, maxChunk;
+        MemHeapFreeBytes(0, &freeBytes, &maxChunk);
+        UdpLogLine(s->logP, "mem", "before: heap % KB free, largest % KB",
+            p->heapFree / 1024, p->heapChunk / 1024, 0);
+        UdpLogLine(s->logP, "mem", "arena % KB, rings % + % KB",
+            p->arenaSize / 1024, p->ringSizes[0] / 1024, p->ringSizes[1] / 1024);
+        UdpLogLine(s->logP, "mem", "after: heap % KB free, thumbnails % KB",
+            freeBytes / 1024, ThumbBytes(s) / 1024, 0);
+    }
     PlaybackPlay(s->playbackP);
     s->playWait = 0;
     s->playStatusTicks = TimGetTicks();
@@ -1740,7 +1924,10 @@ static void ReturnFromPlay(AppState *s)
     ClosePlayback(s);
     FrmReturnToForm(0);
     FrmDrawForm(FrmGetActiveForm());
-    if (OnForm(DetailForm)) RefreshDetail(s);
+    if (OnForm(DetailForm)) {
+        RefreshDetail(s);
+        StartThumbs(s);
+    }
 }
 
 /* Runs playback after each event while PlayForm is up. */
@@ -1786,6 +1973,12 @@ static void StepPlayback(AppState *s)
             UdpLogLine(s->logP, tagP, "level %, late %, peak net % ms",
                 p->level, p->lateTotal,
                 p->peakNet * 1000UL / SysTicksPerSecond());
+            if (s->logP != 0) {
+                UInt32 used, peak;
+                PlaybackArenaUse(p, &used, &peak);
+                UdpLogLine(s->logP, tagP, "arena % KB used, peak % KB",
+                    used / 1024, peak / 1024, 0);
+            }
         }
         if (p->playing) EvtResetAutoOffTimer();
         if (!s->seekDragging && !s->skipPending) {
@@ -1813,14 +2006,12 @@ static void FinishJob(AppState *s)
         s->task = taskIdle;
         FinishPlayer(s);
         RefreshDetail(s);
-        StartThumb(s);
+        StartThumbs(s);
     } else if (task == taskDownload) {
         FinishChunk(s);
         RefreshDetail(s);
-    } else if (task == taskThumb) {
-        s->task = taskIdle;
-        FinishThumb(s);
-        DrawThumb(s);
+    } else if (task == taskThumbs) {
+        ThumbsEnded(s);
     }
 }
 
@@ -1829,11 +2020,19 @@ static void FinishJob(AppState *s)
 static void AdvanceJob(AppState *s)
 {
     UInt32 start = TimGetTicks();
+    /* Thumbnails wait while the list is in use: a decode or a handshake
+     * step cannot be interrupted. */
+    if (s->task == taskThumbs &&
+            start - s->lastInputTicks < SysTicksPerSecond() / 2)
+        return;
     while (s->jobP != 0) {
-        if (NetJobStep(&s->jobP) == netJobFinished) {
+        UInt16 progress = NetJobStep(&s->jobP);
+        if (progress == netJobFinished) {
             FinishJob(s);
             return;
         }
+        /* Only thumbnail downloads keep connections open. */
+        if (progress == netJobIdle) ThumbArrived(s);
         if (TimGetTicks() - start >= STEP_SLICE_TICKS || EvtSysEventAvail(true))
             return;
     }
@@ -1851,11 +2050,13 @@ static void ReturnToMain(AppState *s)
         while (s->jobP != 0) NetJobStep(&s->jobP);
     }
     CloseFile(s);
-    FreeThumb(s);
     s->task = taskIdle;
+    StopThumbs(s);
+    FreeBitmap(&s->detailThumbP, &s->detailBitsP);
     FrmReturnToForm(MainForm);
     FrmDrawForm(FrmGetActiveForm());
     ShowResults(s, true);
+    StartThumbs(s);
 }
 
 /* A 5-way button pressed just now, as palmOne reports it */
@@ -1925,13 +2126,14 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 case CancelButton: CancelJob(s); return true;
                 case BackButton: ReturnToMain(s); return true;
                 case SavedButton:
+                    StopThumbs(s);
                     if (s->task == taskIdle) FrmPopupForm(SavedForm);
                     return true;
                 case SavedBackButton: ReturnFromSaved(s); return true;
                 /* With no history, nothing pops up. */
                 case HistoryTrigger: return ShowHistory(s) == 0;
                 case PlayButton:
-                    StopThumb(s);
+                    StopThumbs(s);
                     if (s->saved) StrCopy(s->playPath, s->outPath);
                     else s->playPath[0] = '\0';
                     FrmPopupForm(PlayForm);
@@ -2106,6 +2308,7 @@ static Err StartApplication(AppState *s)
         return memErrNotEnoughSpace;
     YtSearchInit(s->searchP);
     s->resultFocus = NO_RESULT;
+    s->thumbItem = NO_RESULT;
     YtPlayerInit(s->playerP, kVideoItags, kAudioItags);
     *(Char *)MemHandleLock(s->searchTextH) = '\0';
     MemHandleUnlock(s->searchTextH);
@@ -2133,7 +2336,7 @@ static void StopApplication(AppState *s)
         while (s->jobP != 0) NetJobStep(&s->jobP);
     }
     CloseFile(s);
-    FreeThumb(s);
+    FreeThumbs(s);
     {
         /* The search text handle belongs to the app; detach it so closing
          * the form does not free it. */
@@ -2183,6 +2386,9 @@ UInt32 PilotMain(UInt16 cmd, void *cmdPBP, UInt16 launchFlags)
                     (timeout == evtWaitForever || s->playWait < timeout))
                 timeout = s->playWait;
             EvtGetEvent(&event, timeout);
+            if (event.eType == penDownEvent || event.eType == penMoveEvent ||
+                    event.eType == keyDownEvent || event.eType == sclRepeatEvent)
+                s->lastInputTicks = TimGetTicks();
             if (!SysHandleEvent(&event) && !MenuHandleEvent(0, &event, &error) &&
                 !HandleEvent(&event, s))
                 FrmDispatchEvent(&event);

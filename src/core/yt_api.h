@@ -63,9 +63,10 @@ Boolean YtSplitUrl(const Char *urlP, Char *hostP, UInt16 hostCapacity,
 UInt16 YtBuildMediaRequest(const YtClient *clientP, const Char *urlP,
                            UInt32 start, UInt32 end, Boolean keepAlive,
                            Char *requestP, UInt16 capacity);
-/* GET for a video's smallest thumbnail, default.jpg, from YT_THUMB_HOST. */
+/* GET for a video's smallest thumbnail, default.jpg, from YT_THUMB_HOST.
+ * With keepAlive the next thumbnail can follow on the same connection. */
 UInt16 YtBuildThumbRequest(const YtClient *clientP, const Char *videoIdP,
-                           Char *requestP, UInt16 capacity);
+                           Boolean keepAlive, Char *requestP, UInt16 capacity);
 /* Replaces a stream URL with where a redirect sent it, without the range
  * parameter the redirect carries. False, leaving urlP alone, if locationP
  * is not https or does not fit. */

@@ -366,12 +366,15 @@ static const Char *LoadDecoder(Playback *p)
     if (ArmModuleLoad(&p->module) != errNone) return "Could not load the decoder.";
     p->moduleLoaded = true;
     MemHeapFreeBytes(0, &freeBytes, &maxChunk);
+    p->heapFree = freeBytes;
+    p->heapChunk = maxChunk;
     arenaSize = maxChunk > HEAP_RESERVE ? maxChunk - HEAP_RESERVE : 0;
     if (arenaSize > ARENA_LIMIT) arenaSize = ARENA_LIMIT;
     if (arenaSize < ARENA_MINIMUM)
         return "Not enough free memory. Close other apps and try again.";
     p->arenaP = (UInt8 *)ArmLargeAlloc(arenaSize);
     if (p->arenaP == 0) return "Not enough free memory.";
+    p->arenaSize = arenaSize;
     if (Call(p, armCmdInit, (UInt32)p->arenaP, arenaSize,
             (UInt32)p->module.stackP, ARM_STACK_SIZE) != 0 ||
         p->module.callP->out[0] != ARM_MODULE_VERSION)
@@ -1050,4 +1053,14 @@ void PlaybackSetVolume(Playback *p, UInt16 gain)
 const Char *PlaybackError(const Playback *p)
 {
     return p->errorP;
+}
+
+void PlaybackArenaUse(Playback *p, UInt32 *usedP, UInt32 *peakP)
+{
+    *usedP = 0;
+    *peakP = 0;
+    if (!p->moduleLoaded || p->arenaP == 0) return;
+    Call(p, armCmdStats, 0, 0, 0, 0);
+    *usedP = p->module.callP->out[0];
+    *peakP = p->module.callP->out[1];
 }

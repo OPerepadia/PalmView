@@ -209,11 +209,11 @@ static void TestApiRequests(void)
         strstr(request, "\"videoId\":\"dQw4w9WgXcQ\"") != 0);
     Expect("player request too small buffer", YtBuildPlayerRequest(&client,
         visitor, "dQw4w9WgXcQ", body, request, 600) == 0);
-    length = YtBuildThumbRequest(&client, "dQw4w9WgXcQ", request,
+    length = YtBuildThumbRequest(&client, "dQw4w9WgXcQ", true, request,
         sizeof(request));
     Expect("thumbnail request", length != 0 && strncmp(request,
         "GET /vi/dQw4w9WgXcQ/default.jpg HTTP/1.1\r\nHost: i.ytimg.com\r\n",
-        58) == 0);
+        58) == 0 && strstr(request, "Connection: keep-alive\r\n\r\n") != 0);
 }
 
 static long ReadSample(const char *pathP, UInt8 *dataP, long capacity)
@@ -226,25 +226,42 @@ static long ReadSample(const char *pathP, UInt8 *dataP, long capacity)
     return length;
 }
 
+/* Sum of channel differences between RGB565 pixels and 8-bit RGB */
+static long Difference(const UInt16 *pixelsP, const UInt8 *rgbP, long count)
+{
+    long error = 0, j;
+    for (j = 0; j < count; j++) {
+        UInt16 p = pixelsP[j];
+        error += labs((long)((p >> 8) & 0xF8) - (rgbP[3 * j] & 0xF8));
+        error += labs((long)((p >> 3) & 0xFC) - (rgbP[3 * j + 1] & 0xFC));
+        error += labs((long)((p << 3) & 0xF8) - (rgbP[3 * j + 2] & 0xF8));
+    }
+    return error;
+}
+
 /* Thumbnails in testdata/thumbs/, each with Pillow's pixels for the same
  * rows in a .rgb file next to it. The decoders round and upsample color
- * differently, so only the average difference is checked. */
+ * differently, so only the average difference is checked: about 5 for
+ * saturated pictures, 25 or more if rows are off by one. */
 static void TestThumbnails(void)
 {
     static UInt8 jpeg[THUMB_JPEG_CAPACITY];
     static UInt8 reference[THUMB_WIDTH * THUMB_HEIGHT * 3];
+    static UInt8 small[THUMB_SMALL_WIDTH * THUMB_SMALL_HEIGHT * 3];
     static UInt16 pixels[THUMB_WIDTH * THUMB_HEIGHT];
     static UInt8 work[THUMB_WORK_SIZE];
+    const long fullCount = THUMB_WIDTH * THUMB_HEIGHT;
+    const long smallCount = THUMB_SMALL_WIDTH * THUMB_SMALL_HEIGHT;
     glob_t found;
     size_t i;
     memset(jpeg, 0x5A, sizeof(jpeg));
-    Expect("not a JPEG", !ThumbDecode(jpeg, sizeof(jpeg), pixels, work));
+    Expect("not a JPEG", !ThumbDecode(jpeg, sizeof(jpeg), pixels, work, false));
     if (glob("testdata/thumbs/*.jpg", 0, 0, &found) != 0) return;
     for (i = 0; i < found.gl_pathc; i++) {
         const char *pathP = found.gl_pathv[i];
         char referencePath[256];
-        long length = ReadSample(pathP, jpeg, sizeof(jpeg)), error = 0;
-        long j;
+        long length = ReadSample(pathP, jpeg, sizeof(jpeg));
+        int x, y, c;
         snprintf(referencePath, sizeof(referencePath), "%.*s.rgb",
             (int)(strlen(pathP) - 4), pathP);
         if (length <= 0 || ReadSample(referencePath, reference,
@@ -253,19 +270,22 @@ static void TestThumbnails(void)
             continue;
         }
         Expect("thumbnail truncated", !ThumbDecode(jpeg, (UInt16)(length / 2),
-            pixels, work));
-        if (!ThumbDecode(jpeg, (UInt16)length, pixels, work)) {
-            Expect(pathP, 0);
-            continue;
-        }
-        for (j = 0; j < THUMB_WIDTH * THUMB_HEIGHT; j++) {
-            UInt16 p = pixels[j];
-            error += labs((long)((p >> 8) & 0xF8) - (reference[3 * j] & 0xF8));
-            error += labs((long)((p >> 3) & 0xFC) - (reference[3 * j + 1] & 0xFC));
-            error += labs((long)((p << 3) & 0xF8) - (reference[3 * j + 2] & 0xF8));
-        }
-        /* About 5 for saturated pictures; 25+ if rows are off by one. */
-        Expect(pathP, error <= 8L * THUMB_WIDTH * THUMB_HEIGHT * 3);
+            pixels, work, false));
+        Expect(pathP, ThumbDecode(jpeg, (UInt16)length, pixels, work, false) &&
+            Difference(pixels, reference, fullCount) <= 8 * fullCount * 3);
+        /* Small row y averages full rows 2y + 1 and 2y + 2. */
+        for (y = 0; y < THUMB_SMALL_HEIGHT; y++)
+            for (x = 0; x < THUMB_SMALL_WIDTH; x++)
+                for (c = 0; c < 3; c++) {
+                    const UInt8 *p = reference +
+                        ((2 * y + 1) * THUMB_WIDTH + 2 * x) * 3 + c;
+                    small[(y * THUMB_SMALL_WIDTH + x) * 3 + c] = (UInt8)
+                        ((p[0] + p[3] + p[THUMB_WIDTH * 3] +
+                          p[THUMB_WIDTH * 3 + 3] + 2) / 4);
+                }
+        /* A row off gives 7 or more here. */
+        Expect("small thumbnail", ThumbDecode(jpeg, (UInt16)length, pixels,
+            work, true) && Difference(pixels, small, smallCount) <= 6 * smallCount * 3);
     }
     globfree(&found);
 }

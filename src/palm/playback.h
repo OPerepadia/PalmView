@@ -32,6 +32,9 @@ typedef struct Playback {
     ArmModule module;
     Boolean moduleLoaded;
     UInt8 *arenaP;
+    UInt32 arenaSize;
+    UInt32 heapFree;            /* before the arena, for the log */
+    UInt32 heapChunk;           /* the largest free chunk then */
     Mp4Reader *readerP;
     UInt8 *sampleP;
     UInt16 volume;
@@ -173,5 +176,7 @@ UInt32 PlaybackDurationMs(const Playback *p);
 UInt32 PlaybackBufferedMs(const Playback *p, UInt16 track);
 /* Why streaming stopped, or 0. */
 const Char *PlaybackError(const Playback *p);
+/* Arena bytes the decoder uses now, and at most so far. */
+void PlaybackArenaUse(Playback *p, UInt32 *usedP, UInt32 *peakP);
 
 #endif
