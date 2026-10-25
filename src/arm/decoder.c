@@ -32,6 +32,7 @@ static DecStream gAudio;
 static uint32_t gRgbTable[3 * RGB_TABLE_SIZE];
 static uint16_t gChroma[512][2];
 static uint8_t gRepeat[DEC_RGB_MAX_SOURCE];
+static uint16_t gSourceX[DEC_RGB_MAX_SOURCE];
 static uint32_t gRgbTableFlags;
 static int gRgbTablesReady;
 
@@ -330,6 +331,24 @@ static void ConvertRowExact(uint16_t *o0, const uint8_t *yP, const uint8_t *uP,
     ConvertRow(o0, 0, yP, uP, vP, sourceWidth, 0, 0);
 }
 
+/* Downscaling: converts only the source pixels gSourceX picks. */
+static void ConvertRowScaled(uint16_t *o, const uint8_t *yRowP,
+                             const uint8_t *uRowP, const uint8_t *vRowP,
+                             uint32_t width)
+{
+    const uint32_t *tableP = gRgbTable;
+    const uint16_t (*chromaP)[2] = gChroma;
+    const uint16_t *sxP = gSourceX;
+    uint16_t *endP = o + width;
+    while (o < endP) {
+        uint32_t sx = *sxP++, y = yRowP[sx];
+        const uint16_t *cuP = chromaP[uRowP[sx >> 1]];
+        const uint16_t *cvP = chromaP[256 + vRowP[sx >> 1]];
+        *o++ = (uint16_t)(TABLE_AT(cvP[0])[y] + TABLE_AT(cvP[1] + cuP[1])[y] +
+            TABLE_AT(cuP[0])[y]);
+    }
+}
+
 /* Nearest source index for output index i of n, sampling pixel centers. */
 static uint32_t SourceIndex(uint32_t i, uint32_t n, uint32_t sourceN)
 {
@@ -353,6 +372,18 @@ int DecVideoToRgb565(uint8_t *dstP, uint32_t stride, uint32_t width,
         return decErrState;
     flags &= DEC_RGB_BIG_ENDIAN;
     if (!gRgbTablesReady || gRgbTableFlags != flags) InitRgbTables(flags);
+    if (width < sourceWidth) {
+        for (x = 0; x < width; x++)
+            gSourceX[x] = (uint16_t)SourceIndex(x, width, sourceWidth);
+        for (y = 0; y < height; y++) {
+            uint32_t sy = SourceIndex(y, height, sourceHeight);
+            ConvertRowScaled((uint16_t *)(dstP + y * stride),
+                f->data[0] + sy * (uint32_t)f->linesize[0],
+                f->data[1] + (sy >> 1) * (uint32_t)f->linesize[1],
+                f->data[2] + (sy >> 1) * (uint32_t)f->linesize[2], width);
+        }
+        return 0;
+    }
     memset(gRepeat, 0, sourceWidth);
     for (x = 0; x < width; x++) gRepeat[SourceIndex(x, width, sourceWidth)]++;
     for (x = 0; x < sourceWidth; x++)

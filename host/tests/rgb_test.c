@@ -91,7 +91,7 @@ static void CheckFrame(unsigned sourceWidth, unsigned sourceHeight,
 int main(void)
 {
     static const unsigned sizes[][4] = {
-        {256, 144, 320, 180}, {257, 145, 321, 181},
+        {256, 144, 320, 180}, {257, 145, 321, 181}, {426, 240, 320, 180},
         {256, 144, 256, 144}, {255, 143, 128, 72},
         {256, 144, 512, 288}, {31, 17, 124, 68},
         {DEC_RGB_MAX_SOURCE, 3, 4 * DEC_RGB_MAX_SOURCE, 12},
