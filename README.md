@@ -39,7 +39,7 @@ You need Palm OS 5, Wi-Fi and an SD card. On the TX:
    **Options > Clear Search History** forgets them.
 2. Each result shows its title, then its views, age and channel. Tap a
    result, or move to it with 5-way up and down and press the centre, and
-   PalmView fetches the stream info.
+   PalmView fetches the stream info, then the video's thumbnail.
 3. Tap **Play** to stream it, or **Download** to save it. Download progress
    shows the speed and TLS handshake time.
 4. A downloaded video is saved as `/PalmView/<title>.mp4` on the card. Tap
@@ -276,7 +276,7 @@ headers (for the host tool) and Python 3 (for tests).
 
 ```sh
 tools/fetch-toolchain.sh   # prebuilt palm-toolchain from its Docker image
-tools/fetch-deps.sh        # SDK 5r4 and PalmTLS, pinned
+tools/fetch-deps.sh        # SDK 5r4, PalmTLS and TJpgDec, pinned
 tools/build-arm-deps.sh    # FFmpeg and musl for the ARM module, pinned
 make                       # build/debug/PalmView.prc
 make test                  # host tests
@@ -315,7 +315,7 @@ against ffmpeg's.
   `json_scan` (streaming JSON), `yt_api` (YouTube requests and responses),
   `mp4_merge`, `mp4_read` (saved files), `mp4_stream` (DASH streams as they
   arrive), `mp4_frag` (fragment parsing for both), `text` (encodings, file
-  names).
+  names), `thumb` (thumbnails, decoded with TJpgDec).
 - `src/palm/`: the app. `main.c` (UI and flow), `net_job.c` (cooperative
   HTTPS, based on PalmTLS's TLS Tester), `stream_feed.c` (streaming
   downloads), `store.c` (memory card), `arm_module.c` (native code loader),
@@ -346,6 +346,7 @@ builds. Globals are not available: keep state on the heap.
 ## License
 
 GPL-3.0-or-later, because PalmTLS and its HTTP component are GPLv3.
+The app also contains TJpgDec by ChaN (its own permissive license).
 The ARM module also contains FFmpeg (LGPL-2.1-or-later, built without GPL
 parts), musl's libm (MIT) and parts of newlib.
 Downloading from YouTube may break its terms of service; this is for

@@ -36,13 +36,19 @@ RESOURCE_RCP := $(BUILD_DIR)/app.rcp
 MAP := $(BUILD_DIR)/$(APP_ID).map
 
 CORE_SOURCES := $(wildcard src/core/*.c)
+# TJpgDec (tools/fetch-deps.sh), copied next to PalmView's tjpgdcnf.h: its
+# tjpgd.h includes the settings file from its own directory.
+TJPGD := $(ROOT)/build/tjpgd
+TJPGD_FILES := $(TJPGD)/tjpgd.c $(TJPGD)/tjpgd.h $(TJPGD)/tjpgdcnf.h
+HOST_SOURCES := $(CORE_SOURCES) $(TJPGD)/tjpgd.c
 # 68000 calls reach only +/-32 KB, and the code is larger than that, so
 # tools/m68k-veneers.py gives each object long-call veneers for the
 # functions it calls in other files. Data references stay within a file.
 LINK_ORDER := palm/startup palm/arm_module core/mp4_read palm/playback \
 	core/mp4_merge core/mp4_frag palm/store palm/main core/text core/json_scan core/yt_api \
-	palm/net_job core/mp4_stream palm/stream_feed palm/udp_log
-OBJECTS := $(patsubst %,$(BUILD_DIR)/%.o,$(LINK_ORDER)) $(BUILD_DIR)/http.o
+	core/thumb palm/net_job core/mp4_stream palm/stream_feed palm/udp_log
+OBJECTS := $(patsubst %,$(BUILD_DIR)/%.o,$(LINK_ORDER)) $(BUILD_DIR)/http.o \
+	$(BUILD_DIR)/tjpgd.o
 FAR_DIR := $(BUILD_DIR)/far
 FAR_OBJECTS := $(patsubst $(BUILD_DIR)/%,$(FAR_DIR)/app/%,$(OBJECTS))
 DEPFILES := $(OBJECTS:.o=.d)
@@ -85,7 +91,7 @@ WARN_FLAGS := -Wall -Wextra -Wsign-compare -Wno-unused-parameter
 # -fno-merge-constants keeps each file's strings next to its code; merged
 # strings can land out of PC-relative reach.
 COMMON_FLAGS := $(ABI_FLAGS) $(WARN_FLAGS) -std=gnu17 -MMD -MP -ffunction-sections \
-	-fdata-sections -fno-merge-constants -DPALMOS -DAPP_CREATOR="'$(APP_CREATOR)'" -Isrc/core -Isrc/palm -Isrc/arm \
+	-fdata-sections -fno-merge-constants -DPALMOS -DAPP_CREATOR="'$(APP_CREATOR)'" -Isrc/core -Isrc/palm -Isrc/arm -I$(TJPGD) \
 	-I$(PALM_TLS)/library/include -I$(HTTP_COMPONENT)/include $(SDK_INCLUDES)
 # Debug builds optimize for size too: -O1 code no longer fits in 64 KB.
 PROFILE_FLAGS := $(if $(filter release,$(PROFILE)),-Os,-Os -g)
@@ -93,7 +99,7 @@ LDFLAGS := $(ABI_FLAGS) $(PROFILE_FLAGS) -nostartfiles -Wl,--gc-sections \
 	-Wl,-T,$(ROOT)/src/palm/linker.lkr -Wl,-Map,$(MAP)
 
 HOST_FLAGS := -std=c99 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -O1 -g \
-	-fsanitize=address,undefined -Ihost/shim -Isrc/core -I$(HTTP_COMPONENT)/include
+	-fsanitize=address,undefined -Ihost/shim -Isrc/core -I$(TJPGD) -I$(HTTP_COMPONENT)/include
 PVIEW := $(HOST_DIR)/pview
 JSON_DUMP := $(HOST_DIR)/json_dump
 UNIT_TESTS := $(HOST_DIR)/unit_tests
@@ -125,7 +131,8 @@ dist: release bench
 		$(ROOT)/build/release/bench/$(BENCH_ID).prc dist/
 	@ls -l dist
 
-$(BUILD_DIR) $(BUILD_DIR)/core $(BUILD_DIR)/palm $(BUILD_DIR)/bench $(HOST_DIR) $(ARM_DIR):
+$(BUILD_DIR) $(BUILD_DIR)/core $(BUILD_DIR)/palm $(BUILD_DIR)/bench $(HOST_DIR) $(ARM_DIR) \
+		$(TJPGD):
 	@mkdir -p $@
 
 $(RESOURCE_RCP): src/palm/app.rcp $(ARM_RCP) app.mk | $(BUILD_DIR)
@@ -137,6 +144,14 @@ $(BUILD_DIR)/%.o: src/%.c app.mk | $(BUILD_DIR)/core $(BUILD_DIR)/palm $(BUILD_D
 
 $(BUILD_DIR)/http.o: $(HTTP_COMPONENT)/src/http.c | $(BUILD_DIR)
 	$(CC) $(COMMON_FLAGS) $(PROFILE_FLAGS) -c $< -o $@
+
+$(TJPGD)/tjpgd.c $(TJPGD)/tjpgd.h: $(TJPGD)/%: $(DEPS)/tjpgd/src/% | $(TJPGD)
+	cp $< $@
+$(TJPGD)/tjpgdcnf.h: src/core/tjpgdcnf.h | $(TJPGD)
+	cp $< $@
+$(BUILD_DIR)/tjpgd.o: $(TJPGD_FILES) | $(BUILD_DIR)
+	$(CC) $(COMMON_FLAGS) $(PROFILE_FLAGS) -c $< -o $@
+$(BUILD_DIR)/core/thumb.o: $(TJPGD_FILES)
 
 # The linker script drops .data and .bss: 68K Palm code resources here have
 # no globals. Fail loudly instead of shipping code that reads garbage.
@@ -262,27 +277,27 @@ $(ARM_RCP): $(ARM_DIR)/pass2.elf tools/armlink.py
 
 host: $(PVIEW)
 
-$(PVIEW): host/pview.c $(CORE_SOURCES) $(HTTP_COMPONENT)/src/http.c \
+$(PVIEW): host/pview.c $(HOST_SOURCES) $(TJPGD_FILES) $(HTTP_COMPONENT)/src/http.c \
 		$(wildcard src/core/*.h) host/shim/PalmOS.h | $(HOST_DIR)
-	$(HOST_CC) $(HOST_FLAGS) host/pview.c $(CORE_SOURCES) \
+	$(HOST_CC) $(HOST_FLAGS) host/pview.c $(HOST_SOURCES) \
 		$(HTTP_COMPONENT)/src/http.c -lssl -lcrypto -o $@
 
 $(JSON_DUMP): host/tests/json_dump.c src/core/json_scan.c src/core/json_scan.h \
 		host/shim/PalmOS.h | $(HOST_DIR)
 	$(HOST_CC) $(HOST_FLAGS) host/tests/json_dump.c src/core/json_scan.c -o $@
 
-$(UNIT_TESTS): host/tests/unit_tests.c $(CORE_SOURCES) $(wildcard src/core/*.h) \
-		host/shim/PalmOS.h | $(HOST_DIR)
-	$(HOST_CC) $(HOST_FLAGS) host/tests/unit_tests.c $(CORE_SOURCES) -o $@
+$(UNIT_TESTS): host/tests/unit_tests.c $(HOST_SOURCES) $(TJPGD_FILES) \
+		$(wildcard src/core/*.h) host/shim/PalmOS.h | $(HOST_DIR)
+	$(HOST_CC) $(HOST_FLAGS) host/tests/unit_tests.c $(HOST_SOURCES) -o $@
 
-$(STREAM_TEST): host/tests/stream_test.c $(CORE_SOURCES) $(wildcard src/core/*.h) \
-		host/shim/PalmOS.h | $(HOST_DIR)
-	$(HOST_CC) $(HOST_FLAGS) host/tests/stream_test.c $(CORE_SOURCES) -o $@
+$(STREAM_TEST): host/tests/stream_test.c $(HOST_SOURCES) $(TJPGD_FILES) \
+		$(wildcard src/core/*.h) host/shim/PalmOS.h | $(HOST_DIR)
+	$(HOST_CC) $(HOST_FLAGS) host/tests/stream_test.c $(HOST_SOURCES) -o $@
 
 $(FEED_TEST): host/tests/feed_test.c src/palm/stream_feed.c src/palm/stream_feed.h \
-		src/palm/net_job.h $(CORE_SOURCES) $(wildcard src/core/*.h) \
+		src/palm/net_job.h $(HOST_SOURCES) $(TJPGD_FILES) $(wildcard src/core/*.h) \
 		host/shim/PalmOS.h | $(HOST_DIR)
-	$(HOST_CC) $(HOST_FLAGS) -Isrc/palm host/tests/feed_test.c $(CORE_SOURCES) -o $@
+	$(HOST_CC) $(HOST_FLAGS) -Isrc/palm host/tests/feed_test.c $(HOST_SOURCES) -o $@
 
 # Offline tests. JSON samples in testdata/ (not committed) are compared
 # with Python's parser when present. Downloaded streams in testdata/media/

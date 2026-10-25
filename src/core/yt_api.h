@@ -11,6 +11,7 @@
  * callbacks with the matching result struct as context. */
 
 #define YT_API_HOST "www.youtube.com"
+#define YT_THUMB_HOST "i.ytimg.com"
 #define YT_VIDEO_ID_CAPACITY 12
 #define YT_URL_CAPACITY 1536
 #define YT_VISITOR_CAPACITY 512
@@ -61,6 +62,9 @@ Boolean YtSplitUrl(const Char *urlP, Char *hostP, UInt16 hostCapacity,
  * request. */
 UInt16 YtBuildMediaRequest(const YtClient *clientP, const Char *urlP,
                            UInt32 start, UInt32 end, Boolean keepAlive,
+                           Char *requestP, UInt16 capacity);
+/* GET for a video's smallest thumbnail, default.jpg, from YT_THUMB_HOST. */
+UInt16 YtBuildThumbRequest(const YtClient *clientP, const Char *videoIdP,
                            Char *requestP, UInt16 capacity);
 /* Replaces a stream URL with where a redirect sent it, without the range
  * parameter the redirect carries. False, leaving urlP alone, if locationP

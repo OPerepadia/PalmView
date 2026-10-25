@@ -20,6 +20,8 @@
 #define CancelButton 1106
 #define BackButton 1107
 #define PlayButton 1108
+#define ThumbGadget 1109
+#define HeadField 1110
 
 #define MainMenuBar 1200
 #define MenuAbout 1201
@@ -35,7 +37,7 @@
 #define PlayVideoGadget 1501
 #define PlayStatusField 1503
 #define PlayPauseButton 1504
-#define PlayDoneButton 1505
+#define PlayBackButton 1505
 #define PlaySeekGadget 1506
 #define PlayVolumeGadget 1507
 

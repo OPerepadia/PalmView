@@ -231,6 +231,21 @@ UInt16 YtBuildMediaRequest(const YtClient *clientP, const Char *urlP,
     return ok ? length : 0;
 }
 
+UInt16 YtBuildThumbRequest(const YtClient *clientP, const Char *videoIdP,
+                           Char *requestP, UInt16 capacity)
+{
+    UInt16 length = 0;
+    Boolean ok = TextAppend(requestP, capacity, &length, "GET /vi/") &&
+        TextAppend(requestP, capacity, &length, videoIdP) &&
+        TextAppend(requestP, capacity, &length,
+            "/default.jpg HTTP/1.1\r\nHost: " YT_THUMB_HOST "\r\nUser-Agent: ") &&
+        TextAppend(requestP, capacity, &length, clientP->userAgent) &&
+        TextAppend(requestP, capacity, &length,
+            "\r\nAccept: */*\r\nAccept-Encoding: identity\r\n"
+            "Connection: close\r\n\r\n");
+    return ok ? length : 0;
+}
+
 Boolean YtApplyRedirect(Char *urlP, UInt16 capacity, const Char *locationP)
 {
     const Char *p = StrChr(locationP, '?');

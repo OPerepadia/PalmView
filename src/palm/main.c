@@ -14,6 +14,7 @@
 #include "store.h"
 #include "stream_feed.h"
 #include "text.h"
+#include "thumb.h"
 #include "udp_log.h"
 #include "yt_api.h"
 
@@ -66,7 +67,8 @@ typedef enum Task {
     taskIdle = 0,
     taskSearch,
     taskPlayer,
-    taskDownload
+    taskDownload,
+    taskThumb           /* in the background: Play and Download stop it */
 } Task;
 
 typedef struct AppPrefs {
@@ -102,6 +104,10 @@ typedef struct AppState {
     NetJobResult jobResult;
     UInt16 task;
     UInt32 taskStartTicks;
+    UInt8 *thumbJpegP;          /* while the thumbnail downloads */
+    UInt16 thumbLength;
+    BitmapType *thumbBitsP;     /* the decoded pixels */
+    BitmapType *thumbP;         /* the same, drawn at double density */
 
     UInt16 volume;
     UInt16 stream;
@@ -119,6 +125,7 @@ typedef struct AppState {
 
     MemHandle searchTextH;
     Char status[80];
+    Char head[144];             /* title and channel, beside the thumbnail */
     Char info[384];
     Char progress[192];
     UInt16 percent;
@@ -773,19 +780,47 @@ static void ScrollInfo(Int16 lines)
     UpdateInfoScrollBar();
 }
 
+/* Appends textP as a field width wide wraps it, cut with "..." after two
+ * lines. */
+static void AppendTwoLines(Char *dstP, UInt16 capacity, const Char *textP,
+                           Coord width)
+{
+    UInt16 length = StrLen(dstP), first, second;
+    FontID font = FntSetFont(stdFont);
+    first = FntWordWrap(textP, (UInt16)width);
+    second = StrLen(textP + first);
+    if (FntWordWrap(textP + first, (UInt16)width) < second) {
+        while (second > 0 && FntCharsWidth(textP + first, (Int16)second) +
+                FntCharWidth(chrEllipsis) > width)
+            second--;
+        while (second > 0 && textP[first + second - 1] == ' ') second--;
+        if (length + first + second + 2 <= capacity) {
+            MemMove(dstP + length, textP, first + second);
+            dstP[length + first + second] = chrEllipsis;
+            dstP[length + first + second + 1] = '\0';
+        }
+    } else {
+        Append(dstP, capacity, textP);
+    }
+    FntSetFont(font);
+}
+
 static void BuildInfo(AppState *s)
 {
     const YtSearchItem *itemP = &s->searchP->items[s->selected];
     const YtPlayer *playerP = s->playerP;
     Char *infoP = s->info;
     UInt16 capacity = sizeof(s->info);
-    infoP[0] = '\0';
-    Append(infoP, capacity, playerP->title[0] != '\0'
-        ? playerP->title : itemP->title);
-    Append(infoP, capacity, "\n");
-    Append(infoP, capacity, playerP->author[0] != '\0'
+    RectangleType bounds;
+    FormType *formP = FrmGetActiveForm();
+    FrmGetObjectBounds(formP, FrmGetObjectIndex(formP, HeadField), &bounds);
+    s->head[0] = '\0';
+    AppendTwoLines(s->head, sizeof(s->head), playerP->title[0] != '\0'
+        ? playerP->title : itemP->title, bounds.extent.x);
+    Append(s->head, sizeof(s->head), "\n");
+    Append(s->head, sizeof(s->head), playerP->author[0] != '\0'
         ? playerP->author : itemP->channel);
-    Append(infoP, capacity, "\n");
+    infoP[0] = '\0';
     Append(infoP, capacity, itemP->length);
     if (itemP->views[0] != '\0') {
         Append(infoP, capacity, " | ");
@@ -803,18 +838,108 @@ static void BuildInfo(AppState *s)
     }
 }
 
+/* Thumbnail */
+
+static Int16 FeedThumb(void *contextP, const UInt8 *dataP, UInt16 length)
+{
+    AppState *s = (AppState *)contextP;
+    if (length > THUMB_JPEG_CAPACITY - s->thumbLength) return 1;
+    MemMove(s->thumbJpegP + s->thumbLength, dataP, length);
+    s->thumbLength += length;
+    return 0;
+}
+
+static void FreeThumb(AppState *s)
+{
+    if (s->thumbJpegP != 0) MemPtrFree(s->thumbJpegP);
+    s->thumbJpegP = 0;
+    if (s->thumbP != 0) BmpDelete(s->thumbP);
+    s->thumbP = 0;
+    if (s->thumbBitsP != 0) BmpDelete(s->thumbBitsP);
+    s->thumbBitsP = 0;
+}
+
+/* Fetches the selected video's thumbnail, after its stream info. */
+static void StartThumb(AppState *s)
+{
+    UInt16 length;
+    FreeThumb(s);
+    s->thumbJpegP = (UInt8 *)MemPtrNew(THUMB_JPEG_CAPACITY);
+    s->thumbLength = 0;
+    length = YtBuildThumbRequest(&s->client,
+        s->searchP->items[s->selected].videoId, s->request, sizeof(s->request));
+    StrCopy(s->host, YT_THUMB_HOST);
+    if (s->thumbJpegP != 0 && length != 0 && NetJobStart(&s->jobP,
+            &s->netConfig, s->host, s->request, length, FeedThumb, s,
+            &s->jobResult))
+        s->task = taskThumb;
+    else
+        FreeThumb(s);
+}
+
+static void StopThumb(AppState *s)
+{
+    if (s->task != taskThumb) return;
+    if (s->jobP != 0) {
+        NetJobCancel(s->jobP);
+        while (s->jobP != 0) NetJobStep(&s->jobP);
+    }
+    s->task = taskIdle;
+    FreeThumb(s);
+}
+
+static void FinishThumb(AppState *s)
+{
+    void *workP = MemPtrNew(THUMB_WORK_SIZE);
+    Coord width, height;
+    UInt16 rowBytes, error;
+    if (s->jobResult.status == netJobOk && workP != 0 &&
+            (s->thumbBitsP = BmpCreate(THUMB_WIDTH, THUMB_HEIGHT, 16, 0,
+                &error)) != 0) {
+        BmpGetDimensions(s->thumbBitsP, &width, &height, &rowBytes);
+        if (rowBytes == THUMB_WIDTH * 2 && ThumbDecode(s->thumbJpegP,
+                s->thumbLength, (UInt16 *)BmpGetBits(s->thumbBitsP), workP))
+            s->thumbP = (BitmapType *)BmpCreateBitmapV3(s->thumbBitsP,
+                kDensityDouble, BmpGetBits(s->thumbBitsP), 0);
+    }
+    if (workP != 0) MemPtrFree(workP);
+    MemPtrFree(s->thumbJpegP);
+    s->thumbJpegP = 0;
+}
+
+/* A light gray box stands in until the thumbnail arrives, or if it
+ * does not. */
+static void DrawThumb(const AppState *s)
+{
+    static const RGBColorType kPlaceholder = { 0, 0xE0, 0xE0, 0xE0 };
+    FormType *formP;
+    RectangleType bounds;
+    if (!OnForm(DetailForm)) return;
+    formP = FrmGetActiveForm();
+    FrmGetObjectBounds(formP, FrmGetObjectIndex(formP, ThumbGadget), &bounds);
+    if (s->thumbP != 0) {
+        WinDrawBitmap(s->thumbP, bounds.topLeft.x, bounds.topLeft.y);
+        return;
+    }
+    WinPushDrawState();
+    WinSetForeColorRGB(&kPlaceholder, 0);
+    WinDrawRectangle(&bounds, 0);
+    WinPopDrawState();
+}
+
 static void RefreshDetail(AppState *s)
 {
+    Boolean idle = s->task == taskIdle || s->task == taskThumb;
     if (!OnForm(DetailForm)) return;
+    SetFieldText(HeadField, s->head);
     SetFieldText(InfoField, s->info);
     UpdateInfoScrollBar();
     SetFieldText(ProgressField, s->progress);
-    ShowObject(DownloadButton, s->task == taskIdle &&
-        YtPlayerPlayable(s->playerP));
-    ShowObject(CancelButton, s->task != taskIdle);
-    ShowObject(PlayButton, s->task == taskIdle &&
-        (s->saved || YtPlayerPlayable(s->playerP)));
+    ShowObject(DownloadButton, idle && YtPlayerPlayable(s->playerP));
+    ShowObject(CancelButton, !idle);
+    ShowObject(PlayButton, idle && (s->saved || YtPlayerPlayable(s->playerP)));
     DrawProgressBar(s);
+    DrawThumb(s);
 }
 
 static void MakeOutPath(AppState *s)
@@ -839,6 +964,7 @@ static Boolean OutFileExists(AppState *s)
 static void StartPlayer(AppState *s)
 {
     const YtSearchItem *itemP = &s->searchP->items[s->selected];
+    FreeThumb(s);
     YtPlayerInit(s->playerP, kVideoItags, kAudioItags);
     s->percent = 0;
     s->saved = false;
@@ -866,15 +992,8 @@ static void FinishPlayer(AppState *s)
         if (YtPlayerPlayable(playerP)) {
             MakeOutPath(s);
             s->saved = OutFileExists(s);
-            if (s->saved) {
-                StrCopy(s->progress, "Already saved. Tap Play to watch it.");
-            } else {
-                StrCopy(s->progress, "Ready in ");
-                AppendSeconds(s->progress, sizeof(s->progress),
-                    TimGetTicks() - s->taskStartTicks);
-                Append(s->progress, sizeof(s->progress),
-                    ". Tap Play to stream it, or Download to save it.");
-            }
+            s->progress[0] = '\0';
+            if (s->saved) StrCopy(s->progress, "Already saved.");
         } else if (StrCompare(playerP->status, "OK") != 0) {
             StrCopy(s->progress, "YouTube: ");
             Append(s->progress, sizeof(s->progress), playerP->reason[0] != '\0'
@@ -1013,6 +1132,7 @@ static void StartDownload(AppState *s)
     Char name[64];
     UInt32 freeBytes = 0, needed;
     Err error;
+    StopThumb(s);
     if (s->task != taskIdle || !YtPlayerPlayable(playerP)) return;
     error = StoreOpenVolume(&s->volume);
     if (error != errNone) {
@@ -1153,7 +1273,7 @@ static void StartMerge(AppState *s)
     Append(s->progress, sizeof(s->progress), " in ");
     AppendSeconds(s->progress, sizeof(s->progress),
         TimGetTicks() - s->taskStartTicks);
-    Append(s->progress, sizeof(s->progress), ". Tap Play to watch it.");
+    Append(s->progress, sizeof(s->progress), ".");
 }
 
 /* Saved videos form */
@@ -1693,9 +1813,14 @@ static void FinishJob(AppState *s)
         s->task = taskIdle;
         FinishPlayer(s);
         RefreshDetail(s);
+        StartThumb(s);
     } else if (task == taskDownload) {
         FinishChunk(s);
         RefreshDetail(s);
+    } else if (task == taskThumb) {
+        s->task = taskIdle;
+        FinishThumb(s);
+        DrawThumb(s);
     }
 }
 
@@ -1726,6 +1851,7 @@ static void ReturnToMain(AppState *s)
         while (s->jobP != 0) NetJobStep(&s->jobP);
     }
     CloseFile(s);
+    FreeThumb(s);
     s->task = taskIdle;
     FrmReturnToForm(MainForm);
     FrmDrawForm(FrmGetActiveForm());
@@ -1764,6 +1890,7 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 ShowObject(DownloadButton, false);
                 ShowObject(PlayButton, false);
                 StartPlayer(s);
+                FldSetTextPtr((FieldType *)GetObject(HeadField), s->head);
                 FldSetTextPtr((FieldType *)GetObject(InfoField), s->info);
                 FldSetTextPtr((FieldType *)GetObject(ProgressField),
                     s->progress);
@@ -1804,12 +1931,13 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 /* With no history, nothing pops up. */
                 case HistoryTrigger: return ShowHistory(s) == 0;
                 case PlayButton:
+                    StopThumb(s);
                     if (s->saved) StrCopy(s->playPath, s->outPath);
                     else s->playPath[0] = '\0';
                     FrmPopupForm(PlayForm);
                     return true;
                 case PlayPauseButton: TogglePause(s); return true;
-                case PlayDoneButton: ReturnFromPlay(s); return true;
+                case PlayBackButton: ReturnFromPlay(s); return true;
                 default: break;
             }
             break;
@@ -2005,6 +2133,7 @@ static void StopApplication(AppState *s)
         while (s->jobP != 0) NetJobStep(&s->jobP);
     }
     CloseFile(s);
+    FreeThumb(s);
     {
         /* The search text handle belongs to the app; detach it so closing
          * the form does not free it. */
