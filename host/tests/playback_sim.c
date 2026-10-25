@@ -463,7 +463,7 @@ int main(int argc, char **argv)
     if (!streaming && argc > 2) gLoad = atof(argv[2]);
     gScreenP = (UInt8 *)LowAlloc(640 * 480);
     errorP = streaming ? OpenFeed(argv, argc) : PlaybackOpen(p, argv[1]);
-    if (errorP == 0) errorP = PlaybackAttachScreen(p, &bounds);
+    if (errorP == 0) errorP = PlaybackAttachScreen(p, &bounds, false);
     if (errorP != 0) {
         fprintf(stderr, "playback: %s\n", errorP);
         return 1;

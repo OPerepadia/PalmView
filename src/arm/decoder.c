@@ -349,6 +349,59 @@ static void ConvertRowScaled(uint16_t *o, const uint8_t *yRowP,
     }
 }
 
+/* Turned pictures go TURN_BAND rows at a time through gBand, then out
+ * along the screen's rows. Written straight down a column instead, each
+ * pixel would be a memory write of its own. */
+#define TURN_BAND 16
+static uint16_t gBand[TURN_BAND * DEC_RGB_MAX_TURNED];
+
+/* Any scale: the source pixels gSourceX picks, each converted once. */
+static void ConvertRowPicked(uint16_t *o, const uint8_t *yRowP,
+                             const uint8_t *uRowP, const uint8_t *vRowP,
+                             uint32_t width)
+{
+    const uint32_t *tableP = gRgbTable;
+    const uint16_t (*chromaP)[2] = gChroma;
+    const uint16_t *sxP = gSourceX, *endP = gSourceX + width;
+    uint32_t last = 0xFFFFFFFFU, pixel = 0;
+    while (sxP < endP) {
+        uint32_t sx = *sxP++;
+        if (sx != last) {
+            uint32_t y = yRowP[sx];
+            const uint16_t *cuP = chromaP[uRowP[sx >> 1]];
+            const uint16_t *cvP = chromaP[256 + vRowP[sx >> 1]];
+            pixel = TABLE_AT(cvP[0])[y] + TABLE_AT(cvP[1] + cuP[1])[y] +
+                TABLE_AT(cuP[0])[y];
+            last = sx;
+        }
+        *o++ = (uint16_t)pixel;
+    }
+}
+
+/* Puts the band's n rows, picture rows first on, turned: each picture
+ * column along a screen row, two pixels a write where it can. */
+static void WriteBand(uint8_t *dstP, uint32_t stride, uint32_t first, uint32_t n,
+                      uint32_t width)
+{
+    uint32_t x;
+    for (x = 0; x < width; x++) {
+        uint16_t *o = (uint16_t *)(dstP + x * stride - 2 * (first + n - 1));
+        const uint16_t *bP = gBand + (n - 1) * width + x;
+        uint32_t k = 0;
+        if (((uintptr_t)o & 2) != 0) {
+            *o++ = *bP;
+            bP -= width;
+            k++;
+        }
+        for (; k + 1 < n; k += 2) {
+            *(uint32_t *)o = bP[0] | ((uint32_t)*(bP - width) << 16);
+            o += 2;
+            bP -= 2 * width;
+        }
+        if (k < n) *o = *bP;
+    }
+}
+
 /* Nearest source index for output index i of n, sampling pixel centers. */
 static uint32_t SourceIndex(uint32_t i, uint32_t n, uint32_t sourceN)
 {
@@ -359,7 +412,7 @@ int DecVideoToRgb565(uint8_t *dstP, uint32_t stride, uint32_t width,
                      uint32_t height, uint32_t flags)
 {
     const AVFrame *f = FrontFrame(&gVideo);
-    uint32_t sourceWidth, sourceHeight, x, y;
+    uint32_t sourceWidth, sourceHeight, x, y, turn = flags & DEC_RGB_TURN;
     int fast = 1;
     if (f == 0 || f->data[0] == 0 || width == 0 || height == 0)
         return decErrState;
@@ -368,10 +421,47 @@ int DecVideoToRgb565(uint8_t *dstP, uint32_t stride, uint32_t width,
     sourceWidth = (uint32_t)f->width;
     sourceHeight = (uint32_t)f->height;
     if (sourceWidth > DEC_RGB_MAX_SOURCE || width > 4 * sourceWidth ||
-        height > 4 * sourceHeight || (((uintptr_t)dstP | stride) & 1) != 0)
+        height > 4 * sourceHeight || (((uintptr_t)dstP | stride) & 1) != 0 ||
+        (turn && width > DEC_RGB_MAX_TURNED))
         return decErrState;
     flags &= DEC_RGB_BIG_ENDIAN;
     if (!gRgbTablesReady || gRgbTableFlags != flags) InitRgbTables(flags);
+    if (turn) {
+        uint32_t lastSy = 0xFFFFFFFFU, first, i;
+        for (x = 0; x < width; x++)
+            gSourceX[x] = (uint16_t)SourceIndex(x, width, sourceWidth);
+        /* Up to twice as wide, the faster row loop can fill the band. */
+        if (width < sourceWidth) fast = 0;
+        if (fast) {
+            memset(gRepeat, 0, sourceWidth);
+            for (x = 0; x < width; x++) gRepeat[gSourceX[x]]++;
+            for (x = 0; x < sourceWidth; x++)
+                if (gRepeat[x] == 0 || gRepeat[x] > 2) fast = 0;
+        }
+        for (first = 0; first < height; first += TURN_BAND) {
+            uint32_t n = height - first < TURN_BAND ? height - first : TURN_BAND;
+            for (i = 0; i < n; i++) {
+                uint32_t sy = SourceIndex(first + i, height, sourceHeight);
+                uint16_t *rowP = gBand + i * width;
+                /* Only the last band is short, so a row repeated from the
+                 * band before is still in the band's last row. */
+                if (sy == lastSy)
+                    memcpy(rowP, i != 0 ? rowP - width
+                        : gBand + (TURN_BAND - 1) * width, width * 2);
+                else if (fast)
+                    ConvertRowFast(rowP, f->data[0] + sy * (uint32_t)f->linesize[0],
+                        f->data[1] + (sy >> 1) * (uint32_t)f->linesize[1],
+                        f->data[2] + (sy >> 1) * (uint32_t)f->linesize[2], sourceWidth);
+                else
+                    ConvertRowPicked(rowP, f->data[0] + sy * (uint32_t)f->linesize[0],
+                        f->data[1] + (sy >> 1) * (uint32_t)f->linesize[1],
+                        f->data[2] + (sy >> 1) * (uint32_t)f->linesize[2], width);
+                lastSy = sy;
+            }
+            WriteBand(dstP, stride, first, n, width);
+        }
+        return 0;
+    }
     if (width < sourceWidth) {
         for (x = 0; x < width; x++)
             gSourceX[x] = (uint16_t)SourceIndex(x, width, sourceWidth);

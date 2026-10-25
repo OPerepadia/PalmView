@@ -63,6 +63,11 @@ BEGIN
     BUTTON "Back" ID PlayBackButton AT (118 145 40 12)
 END
 
+// Full screen: the ARM decoder draws the picture turned, over all of it.
+FORM ID FullForm AT (0 0 160 160) NOFRAME
+BEGIN
+END
+
 MENU ID MainMenuBar
 BEGIN
     PULLDOWN "Options"

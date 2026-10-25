@@ -30,7 +30,9 @@ enum {
 
 /* DecVideoToRgb565 flags */
 #define DEC_RGB_BIG_ENDIAN 0x01        /* 68K byte order of Palm OS bitmaps */
+#define DEC_RGB_TURN 0x02              /* a quarter turn clockwise */
 #define DEC_RGB_MAX_SOURCE 1024
+#define DEC_RGB_MAX_TURNED 512
 
 #define DEC_MAX_QUEUE 4
 
@@ -63,7 +65,12 @@ void DecVideoPop(void);
 void DecVideoGetInfo(DecVideoInfo *infoP);
 /* Converts the oldest queued frame to RGB565, nearest-neighbor scaled to
  * width x height. dstP and stride (in bytes) must be even.
- * Frames wider than DEC_RGB_MAX_SOURCE are rejected. */
+ * Frames wider than DEC_RGB_MAX_SOURCE are rejected.
+ * With DEC_RGB_TURN, the picture goes a quarter turn clockwise, for a
+ * screen held in landscape: each of its rows runs down a screen column,
+ * the first at the right. dstP is where its top-left pixel goes, stride
+ * is still the bytes between screen rows, and width is at most
+ * DEC_RGB_MAX_TURNED. */
 int DecVideoToRgb565(uint8_t *dstP, uint32_t stride, uint32_t width,
                      uint32_t height, uint32_t flags);
 void DecVideoClose(void);

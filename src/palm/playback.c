@@ -21,6 +21,7 @@
 #define LARGE_HEAP (2304UL * 1024)
 #define LARGE_RESERVE (64UL * 1024)
 #define LARGE_QUEUE_DEPTH 2
+#define SHARP_PERCENT 125
 
 /* 0.74 s at 44.1 kHz, enough to cover a slow keyframe; half that if memory
  * is short. The callback asks for SOUND_BUFFER_FRAMES at a time; one AAC
@@ -569,28 +570,35 @@ void PlaybackClose(Playback *p)
 
 /* Fits the picture into the area, keeping its shape. Streams only know
  * its size once they start. */
+/* Turned, the picture's width runs down the area. A picture that fits at
+ * 1:1 and would grow by less than SHARP_PERCENT stays 1:1, sharp. */
 static void FitVideo(Playback *p)
 {
-    UInt32 x = p->areaX, y = p->areaY, w = p->areaW, h = p->areaH;
+    UInt32 areaW = p->turned ? p->areaH : p->areaW;
+    UInt32 areaH = p->turned ? p->areaW : p->areaH;
     UInt32 videoW = p->readerP->video.width, videoH = p->readerP->video.height;
+    UInt32 w = areaW, h = areaH, left, top;
     if (p->bitsP == 0) return;
     if (videoW != 0 && videoH != 0) {
-        if (w * videoH <= h * videoW) {
-            UInt32 fitH = w * videoH / videoW;
-            y += (h - fitH) / 2;
-            h = fitH;
-        } else {
-            UInt32 fitW = h * videoW / videoH;
-            x += (w - fitW) / 2;
-            w = fitW;
+        if (areaW * videoH <= areaH * videoW) h = areaW * videoH / videoW;
+        else w = areaH * videoW / videoH;
+        if (videoW <= areaW && videoH <= areaH && w * 100 < videoW * SHARP_PERCENT) {
+            w = videoW;
+            h = videoH;
         }
     }
-    p->screenP = p->bitsP + y * p->rowBytes + x * 2;
+    left = (areaW - w) / 2;
+    top = (areaH - h) / 2;
+    /* Turned, the picture's top left is at the area's top right. */
+    p->screenP = p->turned
+        ? p->bitsP + (p->areaY + left) * p->rowBytes + (p->areaX + p->areaW - 1 - top) * 2
+        : p->bitsP + (p->areaY + top) * p->rowBytes + (p->areaX + left) * 2;
     p->width = (UInt16)w;
     p->height = (UInt16)h;
 }
 
-const Char *PlaybackAttachScreen(Playback *p, const RectangleType *boundsP)
+const Char *PlaybackAttachScreen(Playback *p, const RectangleType *boundsP,
+                                 Boolean turned)
 {
     BitmapType *bitmapP = WinGetBitmap(WinGetDisplayWindow());
     UInt32 depth = 0, density = kDensityLow, format = pixelFormatIndexed;
@@ -626,9 +634,17 @@ const Char *PlaybackAttachScreen(Playback *p, const RectangleType *boundsP)
     p->areaY = y;
     p->areaW = w;
     p->areaH = h;
-    p->rgbFlags = format == pixelFormat565 ? DEC_RGB_BIG_ENDIAN : 0;
+    p->rgbFlags = (format == pixelFormat565 ? DEC_RGB_BIG_ENDIAN : 0) |
+        (turned ? DEC_RGB_TURN : 0);
+    p->turned = turned;
     FitVideo(p);
     return 0;
+}
+
+void PlaybackDetachScreen(Playback *p)
+{
+    p->screenP = 0;
+    p->bitsP = 0;
 }
 
 /* Video */

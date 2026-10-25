@@ -4,6 +4,7 @@
  * over PalmTLS, merge them into one MP4 on the memory card, and play it. */
 
 #include <PalmOS.h>
+#include <PenInputMgr.h>
 
 #include "json_scan.h"
 #include "mp4_merge.h"
@@ -175,6 +176,8 @@ typedef struct AppState {
     UdpLog *logP;               /* 0 without a log= line */
     Char playPath[STORE_PATH_CAPACITY];     /* empty to stream */
     UInt16 playChoice;          /* the quality streaming */
+    Boolean fullScreen;         /* FullForm is up, the picture turned */
+    UInt16 inputArea;           /* its state before full screen */
     Char playTitle[64];
     Char playStatus[128];
 } AppState;
@@ -1584,6 +1587,7 @@ static void GetVideoBounds(RectangleType *boundsP)
 static void ClearVideoArea(void)
 {
     RectangleType bounds;
+    if (!OnForm(PlayForm)) return;
     GetVideoBounds(&bounds);
     WinDrawRectangle(&bounds, 0);
 }
@@ -1743,6 +1747,7 @@ static void UpdatePlayStatus(AppState *s)
     const Playback *p = s->playbackP;
     Char *textP = s->playStatus;
     UInt16 capacity = sizeof(s->playStatus);
+    if (!OnForm(PlayForm)) return;
     textP[0] = '\0';
     if (PlaybackError(p) != 0) {
         Append(textP, capacity, PlaybackError(p));
@@ -1797,6 +1802,14 @@ static void UpdatePlayStatus(AppState *s)
         AppendNumber(textP, capacity, p->decodeErrors + p->audioErrors);
     }
     SetFieldText(PlayStatusField, textP);
+}
+
+static void ShowPauseLabel(const AppState *s)
+{
+    const Playback *p = s->playbackP;
+    if (!OnForm(PlayForm) || p == 0) return;
+    CtlSetLabel((ControlType *)GetObject(PlayPauseButton),
+        p->ended ? "Replay" : p->playing ? "Pause" : "Play");
 }
 
 static void ClosePlayback(AppState *s)
@@ -1855,19 +1868,25 @@ static void ShowQuality(const AppState *s)
     LstSetSelection((ListType *)GetObject(PlayQualityList), (Int16)s->playChoice);
 }
 
-/* Opens playback from startMs, and plays it if play is set. */
-static void StartPlayAt(AppState *s, UInt32 startMs, Boolean play)
+/* Draws the video into PlayForm's gadget. */
+static const Char *AttachPlayScreen(AppState *s)
 {
     FormType *formP = FrmGetActiveForm();
     RectangleType bounds, formBounds;
+    GetVideoBounds(&bounds);
+    WinGetBounds(FrmGetWindowHandle(formP), &formBounds);
+    bounds.topLeft.x += formBounds.topLeft.x;
+    bounds.topLeft.y += formBounds.topLeft.y;
+    return PlaybackAttachScreen(s->playbackP, &bounds, false);
+}
+
+/* Opens playback from startMs, and plays it if play is set. */
+static void StartPlayAt(AppState *s, UInt32 startMs, Boolean play)
+{
     const Char *errorP = StartPlayback(s, startMs);
     if (errorP == 0) {
         PlaybackSetVolume(s->playbackP, kVolumeGain[s->prefs.volume]);
-        GetVideoBounds(&bounds);
-        WinGetBounds(FrmGetWindowHandle(formP), &formBounds);
-        bounds.topLeft.x += formBounds.topLeft.x;
-        bounds.topLeft.y += formBounds.topLeft.y;
-        errorP = PlaybackAttachScreen(s->playbackP, &bounds);
+        errorP = AttachPlayScreen(s);
     }
     if (errorP != 0) {
         ClosePlayback(s);
@@ -1891,8 +1910,7 @@ static void StartPlayAt(AppState *s, UInt32 startMs, Boolean play)
             freeBytes / 1024, ThumbBytes(s) / 1024, 0);
     }
     if (play) PlaybackPlay(s->playbackP);
-    CtlSetLabel((ControlType *)GetObject(PlayPauseButton),
-        s->playbackP->playing ? "Pause" : "Play");
+    ShowPauseLabel(s);
     ShowObject(PlayPauseButton, true);
     s->playWait = 0;
     s->playStatusTicks = TimGetTicks();
@@ -1969,13 +1987,81 @@ static void SwitchQuality(AppState *s, UInt16 choice)
     StartPlayAt(s, ms, play);
 }
 
+/* Full screen: the input area and status bar go, and the picture is
+ * drawn turned, for the TX held in landscape with the 5-way on the right.
+ * The display's landscape mode cannot be used: the OS then keeps the
+ * screen in a separate bitmap that it turns itself, and only when it
+ * draws. */
+static void FillFullScreen(AppState *s)
+{
+    RectangleType bounds;
+    Coord w, h;
+    WinGetDisplayExtent(&w, &h);
+    RctSetRectangle(&bounds, 0, 0, w, h);
+    WinSetBounds(FrmGetWindowHandle(FrmGetActiveForm()), &bounds);
+    WinDrawRectangle(&bounds, 0);
+    if (s->playbackP != 0) PlaybackAttachScreen(s->playbackP, &bounds, true);
+    s->playWait = 0;
+}
+
+static void ClearPicture(AppState *s)
+{
+    if (OnForm(FullForm)) FillFullScreen(s);
+    else ClearVideoArea();
+}
+
+static void EnterFullScreen(AppState *s)
+{
+    UInt32 version;
+    if (s->playbackP == 0 || FtrGet(pinCreator, pinFtrAPIVersion, &version) != errNone)
+        return;
+    s->fullScreen = true;
+    PlaybackDetachScreen(s->playbackP);
+    FrmPopupForm(FullForm);
+}
+
+static void OpenFullForm(AppState *s)
+{
+    FormType *formP = FrmGetActiveForm();
+    FrmSetDIAPolicyAttr(formP, frmDIAPolicyCustom);
+    WinSetConstraintsSize(FrmGetWindowHandle(formP), 160, 240, 240, 160, 160, 160);
+    s->inputArea = PINGetInputAreaState();
+    PINSetInputAreaState(pinInputAreaClosed);
+    PINSetInputTriggerState(pinInputTriggerDisabled);
+    StatHide();
+    FrmDrawForm(formP);
+    FillFullScreen(s);
+}
+
+static void ShowSystemBars(const AppState *s)
+{
+    StatShow();
+    PINSetInputTriggerState(pinInputTriggerEnabled);
+    PINSetInputAreaState(s->inputArea);
+}
+
+static void ExitFullScreen(AppState *s)
+{
+    s->fullScreen = false;
+    if (s->playbackP != 0) PlaybackDetachScreen(s->playbackP);
+    ShowSystemBars(s);
+    FrmReturnToForm(PlayForm);
+    FrmDrawForm(FrmGetActiveForm());
+    ClearVideoArea();
+    DrawVolume(s);
+    if (s->playbackP != 0) AttachPlayScreen(s);
+    ShowPauseLabel(s);
+    UpdatePlayStatus(s);
+    DrawSeekBar(s);
+    s->playWait = 0;
+}
+
 /* After a seek: an ended video plays again from there. */
 static void FinishSeek(AppState *s, Boolean wasEnded)
 {
     Playback *p = s->playbackP;
     if (wasEnded) PlaybackPlay(p);
-    CtlSetLabel((ControlType *)GetObject(PlayPauseButton),
-        p->playing ? "Pause" : "Play");
+    ShowPauseLabel(s);
     s->playWait = 0;
     UpdatePlayStatus(s);
     DrawSeekBar(s);
@@ -1996,16 +2082,15 @@ static void TogglePause(AppState *s)
         /* After a lost connection, go on from where it stopped. */
         if (s->feedP != 0 && p->ended && PlaybackError(p) != 0 &&
                 PlaybackCanSeek(p)) {
-            ClearVideoArea();
+            ClearPicture(s);
             PlaybackSeek(p, PlaybackPositionMs(p));
             FinishSeek(s, true);
             return;
         }
-        if (p->ended) ClearVideoArea();
+        if (p->ended) ClearPicture(s);
         PlaybackPlay(p);
     }
-    CtlSetLabel((ControlType *)GetObject(PlayPauseButton),
-        p->playing ? "Pause" : "Play");
+    ShowPauseLabel(s);
     s->playWait = 0;
     UpdatePlayStatus(s);
     DrawSeekBar(s);
@@ -2091,7 +2176,7 @@ static void StepPlayback(AppState *s)
     UInt32 now;
     if (p == 0) return;
     /* Another form is on top; winEnterEvent wakes playback up again. */
-    if (!OnForm(PlayForm)) {
+    if (!OnForm(PlayForm) && !OnForm(FullForm)) {
         s->playWait = evtWaitForever;
         return;
     }
@@ -2108,7 +2193,7 @@ static void StepPlayback(AppState *s)
         }
     }
     if (wasPlaying && p->ended) {
-        CtlSetLabel((ControlType *)GetObject(PlayPauseButton), "Replay");
+        ShowPauseLabel(s);
         UpdatePlayStatus(s);
         DrawSeekBar(s);
     } else if ((p->playing || (s->feedP != 0 && !p->ended)) &&
@@ -2141,9 +2226,10 @@ static void StepPlayback(AppState *s)
     }
 }
 
-static Boolean IsPlayWindow(WinHandle windowH)
+/* The window the picture is in */
+static Boolean IsPlayWindow(const AppState *s, WinHandle windowH)
 {
-    FormType *formP = FrmGetFormPtr(PlayForm);
+    FormType *formP = FrmGetFormPtr(s->fullScreen ? FullForm : PlayForm);
     return formP != 0 && windowH == FrmGetWindowHandle(formP);
 }
 
@@ -2219,9 +2305,52 @@ static Boolean NavPressed(const EventType *eventP, UInt16 bit, UInt16 change)
         (eventP->data.keyDown.keyCode & (bit | change)) == (bit | change);
 }
 
+/* The 5-way in the player. Full screen, the TX lies on its side with the
+ * 5-way on the right: up points left and skips back, and right turns the
+ * volume up. */
+static Boolean HandlePlayKey(AppState *s, const EventType *eventP)
+{
+    WChar c = eventP->data.keyDown.chr;
+    Boolean up = c == vchrPageUp || c == vchrRockerUp;
+    Boolean down = c == vchrPageDown || c == vchrRockerDown;
+    Boolean left = c == vchrRockerLeft || NavPressed(eventP, navBitLeft, navChangeLeft);
+    Boolean right = c == vchrRockerRight ||
+        NavPressed(eventP, navBitRight, navChangeRight);
+    Boolean turned = s->fullScreen;
+    if (turned ? right : up) {
+        if (s->prefs.volume < VOLUME_LEVELS - 1) SetVolume(s, s->prefs.volume + 1);
+        return true;
+    }
+    if (turned ? left : down) {
+        if (s->prefs.volume > 0) SetVolume(s, s->prefs.volume - 1);
+        return true;
+    }
+    if (turned ? up : left) {
+        Skip(s, false);
+        return true;
+    }
+    if (turned ? down : right) {
+        Skip(s, true);
+        return true;
+    }
+    /* One press may arrive as both of these. */
+    if (c == vchrRockerCenter || NavPressed(eventP, navBitSelect, navChangeSelect)) {
+        UInt32 now = TimGetTicks();
+        if (now - s->lastCentre >= SysTicksPerSecond() / 4) TogglePause(s);
+        s->lastCentre = now;
+        return true;
+    }
+    return false;
+}
+
 static Boolean HandleEvent(EventType *eventP, AppState *s)
 {
     FormType *formP;
+    /* Not one of eventsEnum's values, so not a case below. */
+    if (eventP->eType == winDisplayChangedEvent) {
+        if (OnForm(FullForm)) FillFullScreen(s);
+        return false;
+    }
     switch (eventP->eType) {
         case nilEvent:
             AdvanceJob(s);
@@ -2239,6 +2368,8 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 FrmDrawForm(FrmGetActiveForm());
             } else if (OnForm(PlayForm)) {
                 OpenPlayForm(s);
+            } else if (OnForm(FullForm)) {
+                OpenFullForm(s);
             } else if (OnForm(DetailForm)) {
                 FrmSetFocus(FrmGetActiveForm(), noFocus);
                 ShowObject(DownloadButton, false);
@@ -2260,6 +2391,7 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 DrawSeekBar(s);
                 DrawVolume(s);
             }
+            if (OnForm(FullForm)) FillFullScreen(s);
             return true;
         case lstSelectEvent:
             if (eventP->data.lstSelect.listID == SavedList &&
@@ -2329,22 +2461,26 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                     return true;
                 GetVideoBounds(&bounds);
                 if (RctPtInRectangle(eventP->screenX, eventP->screenY, &bounds)) {
-                    TogglePause(s);
+                    EnterFullScreen(s);
                     return true;
                 }
+            }
+            if (OnForm(FullForm)) {
+                ExitFullScreen(s);
+                return true;
             }
             break;
         case winExitEvent:
             /* Something is about to cover the video: pause under it. */
             if (s->playbackP != 0 && s->playbackP->playing &&
-                IsPlayWindow(eventP->data.winExit.exitWindow)) {
+                IsPlayWindow(s, eventP->data.winExit.exitWindow)) {
                 PlaybackPause(s->playbackP);
                 s->resumeOnEnter = true;
             }
             break;
         case winEnterEvent:
             if (s->playbackP != 0 && s->resumeOnEnter &&
-                IsPlayWindow(eventP->data.winEnter.enterWindow)) {
+                IsPlayWindow(s, eventP->data.winEnter.enterWindow)) {
                 s->resumeOnEnter = false;
                 PlaybackPlay(s->playbackP);
                 s->playWait = 0;
@@ -2375,36 +2511,8 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                     return true;
                 }
             }
-            if (OnForm(PlayForm)) {
-                WChar c = eventP->data.keyDown.chr;
-                if (c == vchrPageUp || c == vchrRockerUp) {
-                    if (s->prefs.volume < VOLUME_LEVELS - 1)
-                        SetVolume(s, s->prefs.volume + 1);
-                    return true;
-                }
-                if (c == vchrPageDown || c == vchrRockerDown) {
-                    if (s->prefs.volume > 0) SetVolume(s, s->prefs.volume - 1);
-                    return true;
-                }
-                if (c == vchrRockerLeft || NavPressed(eventP, navBitLeft, navChangeLeft)) {
-                    Skip(s, false);
-                    return true;
-                }
-                if (c == vchrRockerRight ||
-                        NavPressed(eventP, navBitRight, navChangeRight)) {
-                    Skip(s, true);
-                    return true;
-                }
-                /* One press may arrive as both of these. */
-                if (c == vchrRockerCenter ||
-                        NavPressed(eventP, navBitSelect, navChangeSelect)) {
-                    UInt32 now = TimGetTicks();
-                    if (now - s->lastCentre >= SysTicksPerSecond() / 4)
-                        TogglePause(s);
-                    s->lastCentre = now;
-                    return true;
-                }
-            }
+            if ((OnForm(PlayForm) || OnForm(FullForm)) && HandlePlayKey(s, eventP))
+                return true;
             if (OnForm(DetailForm) && (eventP->data.keyDown.chr == vchrPageUp ||
                     eventP->data.keyDown.chr == vchrPageDown)) {
                 ScrollInfo(eventP->data.keyDown.chr == vchrPageUp ? -5 : 5);
@@ -2487,6 +2595,7 @@ static Err StartApplication(AppState *s)
 
 static void StopApplication(AppState *s)
 {
+    if (s->fullScreen) ShowSystemBars(s);
     ClosePlayback(s);
     if (s->prefsChanged)
         PrefSetAppPreferences(APP_CREATOR, PREFS_ID, PREFS_VERSION, &s->prefs,

@@ -7,9 +7,12 @@
  *       CPU and memory speed (see memtest.h).
  * Run:  decodes 20 seconds of the chosen file's video and audio and
  *       reports speed, memory and checksums (milestone 2). The checksums
- *       must match build/host/bench on the same file. */
+ *       must match build/host/bench on the same file. In the Screen test
+ *       mode, it turns the screen to landscape instead and draws straight
+ *       into the display bitmap, as the player does. */
 
 #include <PalmOS.h>
+#include <PenInputMgr.h>
 
 #include "arm_module.h"
 #include "decoder.h"
@@ -32,6 +35,8 @@
 #define RGB_BENCH_W 320
 #define RGB_BENCH_H 180
 #define RGB_BENCH_FRAMES 25
+#define MODE_SCREEN 3
+#define SCREEN_TEST_SECONDS 4
 
 typedef struct Bench {
     ArmModule module;
@@ -499,6 +504,95 @@ static void RunAudio(Bench *b, FileRef file)
     Log(b, "\n");
 }
 
+/* Screen test */
+
+static void LogScreen(Bench *b, const Char *nameP)
+{
+    BitmapType *bitmapP = WinGetBitmap(WinGetDisplayWindow());
+    Coord w = 0, h = 0;
+    UInt16 rowBytes = 0;
+    Log(b, nameP);
+    Log(b, ": orientation ");
+    LogNumber(b, SysGetOrientation());
+    if (bitmapP == 0) {
+        Log(b, ", no display bitmap\n");
+        return;
+    }
+    BmpGetDimensions(bitmapP, &w, &h, &rowBytes);
+    Log(b, ", bitmap ");
+    LogNumber(b, (UInt32)w);
+    Log(b, "x");
+    LogNumber(b, (UInt32)h);
+    Log(b, ", row ");
+    LogNumber(b, rowBytes);
+    Log(b, " bytes, bits ");
+    LogHex(b, (UInt32)BmpGetBits(bitmapP));
+    Log(b, "\n");
+}
+
+/* A white bar along the top, then red and green quadrants above blue and
+ * yellow, written straight into the display bitmap. */
+static void DrawQuadrants(void)
+{
+    BitmapType *bitmapP = WinGetBitmap(WinGetDisplayWindow());
+    UInt32 density = kDensityLow, format = pixelFormat565, width, height, x, y;
+    Coord w = 0, h = 0;
+    UInt16 rowBytes = 0, *rowP;
+    UInt8 *bitsP;
+    if (bitmapP == 0 || (bitsP = (UInt8 *)BmpGetBits(bitmapP)) == 0) return;
+    WinScreenGetAttribute(winScreenDensity, &density);
+    WinScreenGetAttribute(winScreenPixelFormat, &format);
+    BmpGetDimensions(bitmapP, &w, &h, &rowBytes);
+    width = rowBytes / 2;
+    height = (UInt32)w == width ? (UInt32)h : (UInt32)h * density / kDensityLow;
+    for (y = 0; y < height; y++) {
+        rowP = (UInt16 *)(bitsP + y * rowBytes);
+        for (x = 0; x < width; x++) {
+            UInt16 c = y < height / 10 ? 0xFFFF
+                : y < height / 2 ? (x < width / 2 ? 0xF800 : 0x07E0)
+                : (x < width / 2 ? 0x001F : 0xFFE0);
+            rowP[x] = format == pixelFormat565 ? c : (UInt16)((c << 8) | (c >> 8));
+        }
+    }
+}
+
+static void ScreenTest(Bench *b)
+{
+    FormType *formP = FrmGetActiveForm();
+    WinHandle windowH = FrmGetWindowHandle(formP);
+    UInt32 version = 0;
+    UInt16 area, orientation;
+    Err error;
+    Log(b, "== Screen test\n");
+    if (FtrGet(pinCreator, pinFtrAPIVersion, &version) != errNone) {
+        Log(b, "No Pen Input Manager\n");
+        ShowLog(b);
+        return;
+    }
+    LogScreen(b, "Before");
+    area = PINGetInputAreaState();
+    orientation = SysGetOrientation();
+    FrmSetDIAPolicyAttr(formP, frmDIAPolicyCustom);
+    WinSetConstraintsSize(windowH, 160, 160, 240, 160, 160, 240);
+    PINSetInputAreaState(pinInputAreaClosed);
+    StatHide();
+    error = SysSetOrientation(sysOrientationLandscape);
+    Log(b, "Turned: error ");
+    LogHex(b, error);
+    Log(b, "\n");
+    LogScreen(b, "Landscape");
+    DrawQuadrants();
+    SysTaskDelay(SCREEN_TEST_SECONDS * SysTicksPerSecond());
+    SysSetOrientation(orientation);
+    StatShow();
+    PINSetInputAreaState(area);
+    WinSetConstraintsSize(windowH, 160, 160, 160, 160, 160, 160);
+    FrmSetDIAPolicyAttr(formP, frmDIAPolicyStayOpen);
+    LogScreen(b, "After");
+    FrmDrawForm(formP);
+    ShowLog(b);
+}
+
 static void RunBench(Bench *b)
 {
     static const Char kModes[3][16] = { "full", "no deblocking", "skip B" };
@@ -506,6 +600,10 @@ static void RunBench(Bench *b)
     FileRef file;
     UInt32 size;
     Char path[STORE_PATH_CAPACITY];
+    if (b->mode == MODE_SCREEN) {
+        ScreenTest(b);
+        return;
+    }
     if (b->fileCount == 0) {
         Log(b, "No MP4 files in /PalmView\n");
         ShowLog(b);

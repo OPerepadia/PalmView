@@ -43,6 +43,8 @@
 #define PlayQualityTrigger 1508
 #define PlayQualityList 1509
 
+#define FullForm 1600
+
 #define AboutAlert 1300
 #define LibraryMissingAlert 1301
 #define RomIncompatibleAlert 1302

@@ -34,13 +34,16 @@ static uint16_t ReferencePixel(int y, int u, int v)
         ((Component(y, g) >> 2) << 5) | (Component(y, b) >> 3));
 }
 
+/* Turned, the picture's rows run down the screen's columns, right to
+ * left. */
 static void CheckFrame(unsigned sourceWidth, unsigned sourceHeight,
     unsigned width, unsigned height, unsigned padding, uint32_t flags)
 {
     AVFrame frame = {0};
-    unsigned stride = 2 * width + padding;
+    int turn = (flags & DEC_RGB_TURN) != 0;
+    unsigned stride = 2 * (turn ? height : width) + padding;
     unsigned offset = 16 + (padding ? 2 : 0);
-    size_t size = offset + stride * height + 16;
+    size_t size = offset + stride * (turn ? width : height) + 16;
     uint8_t *actualP = malloc(size), *expectedP = malloc(size);
     unsigned x, y, plane;
     if (actualP == 0 || expectedP == 0) abort();
@@ -66,7 +69,8 @@ static void CheckFrame(unsigned sourceWidth, unsigned sourceHeight,
             uint16_t pixel = ReferencePixel(frame.data[0][sy * frame.linesize[0] + sx],
                 frame.data[1][(sy / 2) * frame.linesize[1] + sx / 2],
                 frame.data[2][(sy / 2) * frame.linesize[2] + sx / 2]);
-            uint8_t *outP = expectedP + offset + y * stride + 2 * x;
+            uint8_t *outP = expectedP + offset + (turn
+                ? x * stride + 2 * (height - 1 - y) : y * stride + 2 * x);
             outP[0] = (uint8_t)(flags & DEC_RGB_BIG_ENDIAN ? pixel >> 8 : pixel);
             outP[1] = (uint8_t)(flags & DEC_RGB_BIG_ENDIAN ? pixel : pixel >> 8);
         }
@@ -74,7 +78,8 @@ static void CheckFrame(unsigned sourceWidth, unsigned sourceHeight,
     gVideo.queueHead = 1;
     gVideo.queueCount = 1;
     gVideo.queue[1] = &frame;
-    if (DecVideoToRgb565(actualP + offset, stride, width, height, flags) != 0 ||
+    if (DecVideoToRgb565(actualP + offset + (turn ? 2 * (height - 1) : 0), stride,
+            width, height, flags) != 0 ||
         memcmp(actualP, expectedP, size) != 0) {
         fprintf(stderr, "RGB mismatch: %ux%u to %ux%u, padding %u, flags %u\n",
             sourceWidth, sourceHeight, width, height, padding, flags);
@@ -88,6 +93,30 @@ static void CheckFrame(unsigned sourceWidth, unsigned sourceHeight,
     gCases++;
 }
 
+/* A turned picture wider than its band buffer is refused. */
+static void CheckTurnTooWide(void)
+{
+    static uint8_t plane[DEC_RGB_MAX_SOURCE], out[4];
+    AVFrame frame = {0};
+    unsigned i;
+    frame.width = DEC_RGB_MAX_SOURCE;
+    frame.height = 1;
+    frame.format = AV_PIX_FMT_YUV420P;
+    for (i = 0; i < 3; i++) {
+        frame.data[i] = plane;
+        frame.linesize[i] = DEC_RGB_MAX_SOURCE;
+    }
+    gVideo.queueHead = 1;
+    gVideo.queueCount = 1;
+    gVideo.queue[1] = &frame;
+    if (DecVideoToRgb565(out + 2, 2, DEC_RGB_MAX_TURNED + 1, 1, DEC_RGB_TURN) == 0) {
+        fprintf(stderr, "turned picture too wide was not refused\n");
+        exit(1);
+    }
+    gVideo.queue[1] = 0;
+    gVideo.queueCount = 0;
+}
+
 int main(void)
 {
     static const unsigned sizes[][4] = {
@@ -95,10 +124,10 @@ int main(void)
         {256, 144, 256, 144}, {255, 143, 128, 72},
         {256, 144, 512, 288}, {31, 17, 124, 68},
         {DEC_RGB_MAX_SOURCE, 3, 4 * DEC_RGB_MAX_SOURCE, 12},
-        {DEC_RGB_MAX_SOURCE, 3, 1, 1}
+        {DEC_RGB_MAX_SOURCE, 3, 1, 1}, {426, 240, 426, 240}, {256, 144, 480, 270}
     };
     unsigned flags, padding, sw, sh, w, h, i;
-    for (flags = 0; flags <= DEC_RGB_BIG_ENDIAN; flags++) {
+    for (flags = 0; flags <= (DEC_RGB_BIG_ENDIAN | DEC_RGB_TURN); flags++) {
         for (padding = 0; padding <= 6; padding += 6) {
             for (sw = 1; sw <= 9; sw++)
                 for (sh = 1; sh <= 7; sh++)
@@ -106,12 +135,14 @@ int main(void)
                         for (h = 1; h <= 4 * sh; h++)
                             CheckFrame(sw, sh, w, h, padding, flags);
             for (i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++)
-                CheckFrame(sizes[i][0], sizes[i][1], sizes[i][2], sizes[i][3],
-                    padding, flags);
+                if (!(flags & DEC_RGB_TURN) || sizes[i][2] <= DEC_RGB_MAX_TURNED)
+                    CheckFrame(sizes[i][0], sizes[i][1], sizes[i][2], sizes[i][3],
+                        padding, flags);
         }
     }
     CheckFrame(9, 7, 13, 11, 0, 0x80);
     CheckFrame(9, 7, 13, 11, 6, 0x80 | DEC_RGB_BIG_ENDIAN);
+    CheckTurnTooWide();
     printf("rgb tests ok: %u conversions\n", gCases);
     return 0;
 }

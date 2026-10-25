@@ -48,7 +48,7 @@ You need Palm OS 5, Wi-Fi and an SD card. On the TX:
    **Play** to watch it, or open it in CorePlayer.
 
 **Saved** on the main screen lists the videos on the card; tap one to play
-it. In the player, tap the picture, **Pause** or the 5-way centre to pause.
+it. In the player, tap **Pause** or the 5-way centre to pause.
 
 While streaming, the bar under the video shows the position in red and
 what has downloaded in dark gray. Tap or drag on it to jump there, or
@@ -64,6 +64,12 @@ switches between 144p and 240p. Playback goes on from the start of the
 piece of video that holds the current time, as when jumping. PalmView
 remembers the choice for the next video and for downloads. 240p needs an
 overclocked TX; see [240p](#240p).
+
+Tap the picture for full screen, and hold the TX on its side with the
+5-way on the right, as in its landscape mode. 240p shows at its own size,
+426x240; 144p is scaled up to 480x270. The 5-way turns with the picture:
+as you hold it, left and right jump, and up and down change the volume.
+Tap anywhere to go back. See [Full screen](#full-screen).
 
 **Cancel** stops a download; tap **Download** again to resume it. Partial
 streams stay in `/PalmView` as `<id>.video.mp4` and `<id>.audio.mp4` until
@@ -240,6 +246,22 @@ not enough memory for that, PalmView streams 144p instead. Shrinking each
 426x240 frame into the 320x180 picture converts only the pixels it keeps:
 1.5 M instructions a frame instead of 2.7 M.
 
+### Full screen
+
+Full screen hides the input area and status bar, and PalmView draws the
+picture turned a quarter clockwise into the portrait screen. The TX's
+own landscape mode cannot be used. In it, the display bitmap moves to a
+separate 480x320 copy (at 0x50000000 instead of 0x5004B000 on a TX),
+which the OS turns onto the screen only when it draws there itself.
+Bench's Screen test mode shows this.
+
+A turned picture row runs down a screen column. Written that way, every
+pixel lands in another screen row and is a memory write of its own: 144p
+at 480x270 fell to half rate. The converter instead takes 16 rows at a
+time through a buffer in the cache, then writes them out along the
+screen rows, two pixels a write. On the overclocked TX, full screen 240p
+keeps the CPU 50-70% busy, and 144p plays at 23-25 fps.
+
 ### PalmView Bench
 
 `PalmView Bench` measures the decoder on files PalmView saved.
@@ -254,6 +276,9 @@ Install `dist/PalmViewBench.prc` (handheld memory or card), then:
 - **Run** decodes the first 20 seconds of the chosen file's video, then its
   audio, in the chosen mode. It shows decode speed, file read time, color
   conversion speed, memory, and checksums.
+- In the **Screen test** mode, **Run** turns the screen to landscape for
+  4 seconds and draws straight into the display bitmap, as the player
+  does, then lists the bitmap's size and address in each orientation.
 
 Correct decoding gives the same checksums as `build/host/bench FILE 20 MODE`
 on the PC (MODE 0 = full, 1 = no deblocking, 2 = skip B-frames).

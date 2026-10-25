@@ -15,7 +15,7 @@ BEGIN
     LIST "" ID FileList AT (2 40 156 100) VISIBLEITEMS 9 NONUSABLE
     POPUPLIST ID FileTrigger FileList
     POPUPTRIGGER "Full decode" ID ModeTrigger AT (84 114 74 12) LEFTANCHOR
-    LIST "Full decode" "No deblocking" "Skip B-frames" ID ModeList AT (84 114 74 34) VISIBLEITEMS 3 NONUSABLE
+    LIST "Full decode" "No deblocking" "Skip B-frames" "Screen test" ID ModeList AT (84 114 74 45) VISIBLEITEMS 4 NONUSABLE
     POPUPLIST ID ModeTrigger ModeList
     BUTTON "Info" ID InfoButton AT (84 132 34 12)
     BUTTON "Run" ID RunButton AT (122 132 36 12)

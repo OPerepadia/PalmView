@@ -53,6 +53,7 @@ typedef struct Playback {
     UInt16 width;
     UInt16 height;
     UInt32 rgbFlags;
+    Boolean turned;
     UInt8 *bitsP;
     UInt32 areaX, areaY, areaW, areaH;
 
@@ -157,9 +158,13 @@ const Char *PlaybackOpenStream(Playback *p, struct StreamFeed *feedP,
                                Boolean large, UInt32 startMs);
 void PlaybackClose(Playback *p);
 
-/* Fits the video into boundsP (standard coordinates on the display).
+/* Fits the video into boundsP (standard coordinates on the display),
+ * turned a quarter clockwise if asked, for the TX held in landscape.
  * Returns 0, or a message if the screen cannot be drawn to directly. */
-const Char *PlaybackAttachScreen(Playback *p, const RectangleType *boundsP);
+const Char *PlaybackAttachScreen(Playback *p, const RectangleType *boundsP,
+                                 Boolean turned);
+/* Frames are decoded but not drawn until the next attach. */
+void PlaybackDetachScreen(Playback *p);
 
 /* Plays from the start again once the video has ended. */
 void PlaybackPlay(Playback *p);
