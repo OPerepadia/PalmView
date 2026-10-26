@@ -179,10 +179,11 @@ network log below has more.
 - Network calls never wait during playback. The sockets stay non-blocking,
   so TLS does not wait for the rest of a 16 KB record, and a socket is only
   read when it has data. The network gets a turn at least every 20 ms.
-- Smooth streaming needs PalmTLS's faster ARM AES-GCM (the
-  `faster-aes-gcm` branch, not released yet). With PalmTLS 0.1.2, each
-  16 KB record takes about 100 ms to decrypt, and video drops to half rate.
-  `tools/fetch-deps.sh` still pins 0.1.2.
+- Smooth streaming needs PalmTLS's faster ARM AES-GCM. It is not merged
+  yet, so `tools/fetch-deps.sh` fetches PalmTLS from the `faster-aes-gcm`
+  branch of [a fork](https://github.com/OPerepadia/palm-tls). With PalmTLS
+  0.1.2, each 16 KB record takes about 100 ms to decrypt, and video drops
+  to half rate.
 
 ### Network log
 
