@@ -346,11 +346,11 @@ static void TestThumbnails(void)
 {
     static UInt8 jpeg[THUMB_JPEG_CAPACITY];
     static UInt8 reference[THUMB_WIDTH * THUMB_HEIGHT * 3];
-    static UInt8 small[THUMB_SMALL_WIDTH * THUMB_SMALL_HEIGHT * 3];
+    static UInt8 list[THUMB_LIST_WIDTH * THUMB_LIST_HEIGHT * 3];
     static UInt16 pixels[THUMB_WIDTH * THUMB_HEIGHT];
     static UInt8 work[THUMB_WORK_SIZE];
     const long fullCount = THUMB_WIDTH * THUMB_HEIGHT;
-    const long smallCount = THUMB_SMALL_WIDTH * THUMB_SMALL_HEIGHT;
+    const long listCount = THUMB_LIST_WIDTH * THUMB_LIST_HEIGHT;
     glob_t found;
     size_t i;
     memset(jpeg, 0x5A, sizeof(jpeg));
@@ -372,21 +372,48 @@ static void TestThumbnails(void)
             pixels, work, false));
         Expect(pathP, ThumbDecode(jpeg, (UInt16)length, pixels, work, false) &&
             Difference(pixels, reference, fullCount) <= 8 * fullCount * 3);
-        /* Small row y averages full rows 2y + 1 and 2y + 2. */
-        for (y = 0; y < THUMB_SMALL_HEIGHT; y++)
-            for (x = 0; x < THUMB_SMALL_WIDTH; x++)
-                for (c = 0; c < 3; c++) {
-                    const UInt8 *p = reference +
-                        ((2 * y + 1) * THUMB_WIDTH + 2 * x) * 3 + c;
-                    small[(y * THUMB_SMALL_WIDTH + x) * 3 + c] = (UInt8)
-                        ((p[0] + p[3] + p[THUMB_WIDTH * 3] +
-                          p[THUMB_WIDTH * 3 + 3] + 2) / 4);
-                }
-        /* A row off gives 7 or more here. */
-        Expect("small thumbnail", ThumbDecode(jpeg, (UInt16)length, pixels,
-            work, true) && Difference(pixels, small, smallCount) <= 6 * smallCount * 3);
+        /* The list size is the middle of the full one. */
+        for (y = 0; y < THUMB_LIST_HEIGHT; y++)
+            for (x = 0; x < THUMB_LIST_WIDTH; x++)
+                for (c = 0; c < 3; c++)
+                    list[(y * THUMB_LIST_WIDTH + x) * 3 + c] = reference[
+                        ((y + (THUMB_HEIGHT - THUMB_LIST_HEIGHT) / 2) *
+                        THUMB_WIDTH + x + (THUMB_WIDTH - THUMB_LIST_WIDTH) / 2) * 3 + c];
+        Expect("list thumbnail", ThumbDecode(jpeg, (UInt16)length, pixels,
+            work, true) && Difference(pixels, list, listCount) <= 8 * listCount * 3);
     }
     globfree(&found);
+}
+
+static void TestThumbBadge(void)
+{
+    static UInt16 plain[THUMB_LIST_WIDTH * THUMB_LIST_HEIGHT];
+    static UInt16 badge[THUMB_LIST_WIDTH * THUMB_LIST_HEIGHT];
+    int x, y, changed = 0, white = 0;
+    for (y = 0; y < THUMB_LIST_HEIGHT; y++)
+        for (x = 0; x < THUMB_LIST_WIDTH; x++)
+            plain[y * THUMB_LIST_WIDTH + x] = 0x4A69;
+    memcpy(badge, plain, sizeof(plain));
+    ThumbBadge(badge, "");
+    ThumbBadge(badge, "live");
+    Expect("empty duration", memcmp(plain, badge, sizeof(plain)) == 0);
+    ThumbBadge(badge, "1:02:03");
+    for (y = 0; y < THUMB_LIST_HEIGHT; y++)
+        for (x = 0; x < THUMB_LIST_WIDTH; x++) {
+            UInt16 p = badge[y * THUMB_LIST_WIDTH + x];
+            if (p == plain[y * THUMB_LIST_WIDTH + x]) continue;
+            changed++;
+            white += p == 0xFFFF;
+            Expect("badge outside its corner", x >= THUMB_LIST_WIDTH / 3 &&
+                y >= THUMB_LIST_HEIGHT - 20);
+        }
+    Expect("badge box", changed > 40 * 10);
+    Expect("badge text", white > 20);
+    ThumbPlaceholder(plain, "12:34");
+    Expect("placeholder gray", plain[0] == 0xE71C &&
+        plain[THUMB_LIST_WIDTH * THUMB_LIST_HEIGHT / 2] == 0xE71C);
+    Expect("placeholder badge", plain[(THUMB_LIST_HEIGHT - 6) * THUMB_LIST_WIDTH +
+        THUMB_LIST_WIDTH - 5] != 0xE71C);
 }
 
 int main(void)
@@ -402,6 +429,7 @@ int main(void)
     TestApiRequests();
     TestPlayerFormats();
     TestThumbnails();
+    TestThumbBadge();
     if (gFailures != 0) {
         printf("%d unit test(s) failed\n", gFailures);
         return 1;

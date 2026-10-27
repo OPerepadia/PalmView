@@ -83,7 +83,7 @@ typedef struct Thumb {
     UInt8 *jpegP;               /* once downloaded */
     UInt16 length;
     UInt8 state;
-    BitmapType *bitsP;          /* the list's half-size pixels */
+    BitmapType *bitsP;          /* the list's pixels */
     BitmapType *bitmapP;        /* the same, drawn at double density */
 } Thumb;
 
@@ -550,13 +550,14 @@ static Boolean StartApiJob(AppState *s, UInt16 task, UInt16 requestLength)
 
 static void StartThumbs(AppState *s);
 
-/* Decodes a thumbnail into a bitmap drawn at double density. *bitsPP gets
- * the bitmap that holds its pixels. Returns 0 if it cannot. */
-static BitmapType *DecodeThumb(const Thumb *thumbP, Boolean small,
-                               BitmapType **bitsPP)
+/* Decodes a thumbnail into a bitmap drawn at double density; the list's
+ * has the video's duration on it. *bitsPP gets the bitmap that holds its
+ * pixels. Returns 0 if it cannot. */
+static BitmapType *DecodeThumb(const Thumb *thumbP, Boolean list,
+                               const Char *durationP, BitmapType **bitsPP)
 {
-    Coord width = small ? THUMB_SMALL_WIDTH : THUMB_WIDTH;
-    Coord height = small ? THUMB_SMALL_HEIGHT : THUMB_HEIGHT;
+    Coord width = list ? THUMB_LIST_WIDTH : THUMB_WIDTH;
+    Coord height = list ? THUMB_LIST_HEIGHT : THUMB_HEIGHT;
     void *workP = MemPtrNew(THUMB_WORK_SIZE);
     BitmapType *bitsP = 0, *bitmapP = 0;
     Coord bitsWidth, bitsHeight;
@@ -564,9 +565,11 @@ static BitmapType *DecodeThumb(const Thumb *thumbP, Boolean small,
     if (workP != 0 && (bitsP = BmpCreate(width, height, 16, 0, &error)) != 0) {
         BmpGetDimensions(bitsP, &bitsWidth, &bitsHeight, &rowBytes);
         if (rowBytes == (UInt16)(width * 2) && ThumbDecode(thumbP->jpegP, thumbP->length,
-                (UInt16 *)BmpGetBits(bitsP), workP, small))
+                (UInt16 *)BmpGetBits(bitsP), workP, list)) {
+            if (list) ThumbBadge((UInt16 *)BmpGetBits(bitsP), durationP);
             bitmapP = (BitmapType *)BmpCreateBitmapV3(bitsP, kDensityDouble,
                 BmpGetBits(bitsP), 0);
+        }
         if (bitmapP == 0) {
             BmpDelete(bitsP);
             bitsP = 0;
@@ -608,7 +611,7 @@ static UInt32 ThumbBytes(const AppState *s)
     for (i = 0; i < YT_SEARCH_MAX; i++) {
         total += s->thumbs[i].length;
         if (s->thumbs[i].bitmapP != 0)
-            total += THUMB_SMALL_WIDTH * THUMB_SMALL_HEIGHT * 2UL;
+            total += THUMB_LIST_WIDTH * THUMB_LIST_HEIGHT * 2UL;
     }
     return total;
 }
@@ -646,6 +649,31 @@ static void AppendShort(Char *lineP, UInt16 capacity, const Char *textP)
     Char text[20];
     TextShorten(textP, text, sizeof(text));
     AppendDetail(lineP, capacity, text);
+}
+
+/* A gray box with the duration on it, in place of a thumbnail that has not
+ * arrived. Returns false if there is no memory for it. */
+static Boolean DrawPlaceholder(const RectangleType *thumbP, const Char *durationP)
+{
+    BitmapType *bitsP, *bitmapP = 0;
+    Coord width, height;
+    UInt16 rowBytes, error;
+    Boolean drawn = false;
+    bitsP = BmpCreate(THUMB_LIST_WIDTH, THUMB_LIST_HEIGHT, 16, 0, &error);
+    if (bitsP != 0) {
+        BmpGetDimensions(bitsP, &width, &height, &rowBytes);
+        if (rowBytes == (UInt16)(THUMB_LIST_WIDTH * 2)) {
+            ThumbPlaceholder((UInt16 *)BmpGetBits(bitsP), durationP);
+            bitmapP = (BitmapType *)BmpCreateBitmapV3(bitsP, kDensityDouble,
+                BmpGetBits(bitsP), 0);
+        }
+    }
+    if (bitmapP != 0) {
+        WinDrawBitmap(bitmapP, thumbP->topLeft.x, thumbP->topLeft.y);
+        drawn = true;
+    }
+    FreeBitmap(&bitmapP, &bitsP);
+    return drawn;
 }
 
 /* A result: its thumbnail, or a gray box until it arrives, the title on
@@ -687,11 +715,11 @@ static void DrawResultRow(const AppState *s, UInt16 row)
         lineHeight = FntLineHeight();
         margin = WinScaleCoord(2, false);
         RctSetRectangle(&thumb, bounds.topLeft.x + margin, bounds.topLeft.y +
-            (bounds.extent.y - THUMB_SMALL_HEIGHT) / 2, THUMB_SMALL_WIDTH,
-            THUMB_SMALL_HEIGHT);
+            (bounds.extent.y - THUMB_LIST_HEIGHT) / 2, THUMB_LIST_WIDTH,
+            THUMB_LIST_HEIGHT);
         if (thumbP->bitmapP != 0) {
             WinDrawBitmap(thumbP->bitmapP, thumb.topLeft.x, thumb.topLeft.y);
-        } else {
+        } else if (!DrawPlaceholder(&thumb, itemP->length)) {
             WinSetForeColorRGB(&kPlaceholder, 0);
             WinDrawRectangle(&thumb, 0);
         }
@@ -1051,7 +1079,7 @@ static void ShowDetailThumb(AppState *s)
 {
     if (s->detailThumbP == 0 && s->thumbs[s->selected].state == thumbLoaded)
         s->detailThumbP = DecodeThumb(&s->thumbs[s->selected], false,
-            &s->detailBitsP);
+            0, &s->detailBitsP);
     DrawThumb(s);
 }
 
@@ -1117,7 +1145,8 @@ static void StoreThumb(AppState *s, UInt16 item)
     if (thumbP->jpegP != 0) {
         MemMove(thumbP->jpegP, s->thumbBufferP, s->thumbLength);
         thumbP->length = s->thumbLength;
-        thumbP->bitmapP = DecodeThumb(thumbP, true, &thumbP->bitsP);
+        thumbP->bitmapP = DecodeThumb(thumbP, true,
+            s->searchP->items[item].length, &thumbP->bitsP);
     }
     if (thumbP->bitmapP == 0) {
         if (thumbP->jpegP != 0) MemPtrFree(thumbP->jpegP);
