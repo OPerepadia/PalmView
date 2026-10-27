@@ -117,8 +117,12 @@ decoders. `src/palm/playback.c` drives it:
 
 - The decoder keeps up to three frames ready, decoding ahead while there is
   time before the next one is due.
-- Each frame is converted to RGB565 and scaled (256x144 to 320x180) straight
-  into the screen's framebuffer, at its presentation time.
+- Each frame is converted to RGB565 straight into the screen's framebuffer,
+  at its presentation time. 144p grows to 320x180 by area: each screen
+  pixel takes the video pixels it overlaps, in proportion. Edges stay
+  sharp, and every video pixel gets the same width, which nearest-pixel
+  scaling cannot give at 1.25 times. 240p is shrunk to 319x180 (see
+  [240p](#240p)).
 - Sound is decoded into a PCM ring of 0.74 s. A native ARM callback, run
   by the Palm OS sound stream on its own thread, copies it out. The frames
   it has played are the clock the pictures follow. A small assembly entry
@@ -243,9 +247,16 @@ ARMv5TE build) left decoding as fast as before.
 
 The decoder needs about 2.3 MB for 240p, more than the largest free block
 of a TX's heap. It takes a second block from elsewhere. When there is
-not enough memory for that, PalmView streams 144p instead. Shrinking each
-426x240 frame into the 320x180 picture converts only the pixels it keeps:
-1.5 M instructions a frame instead of 2.7 M.
+not enough memory for that, PalmView streams 144p instead.
+
+In the player, 240p is shrunk by 4 to 3, from 426x240 to 319x180. Each
+picture pixel averages the luma of the source pixels it covers, with
+weights of 3:1, 1:1 or 1:3 across and down. Taking the nearest pixel
+instead drops every fourth row and column: edges come out jagged and
+flicker in motion. One word holds four source pixels, and the even and
+odd columns are blended as two 16-bit halves at once. That takes 1.8 M
+instructions a frame against 1.5 M for the nearest pixel. On the
+overclocked TX, both keep the CPU about 53% busy.
 
 ### Full screen
 
@@ -398,7 +409,8 @@ against ffmpeg's.
   downloads), `store.c` (memory card), `arm_module.c` (native code loader),
   `playback.c` (the player), `udp_log.c` (the network log).
 - `src/arm/`: the native ARM module. `decoder.c` (FFmpeg wrapper),
-  `sound.c` (the PCM ring and stream callback), `dispatch.c` and `entry.S`
+  `rgb.c` (frames to RGB565, scaled and turned), `sound.c` (the PCM ring
+  and stream callback), `dispatch.c` and `entry.S`
   (the 68K-to-ARM call), `libc.c` (heap and the C library bits FFmpeg
   needs).
 - `src/bench/`: PalmView Bench.

@@ -64,7 +64,9 @@ uint32_t DecVideoQueued(uint32_t *frontPtsP);
 void DecVideoPop(void);
 void DecVideoGetInfo(DecVideoInfo *infoP);
 /* Converts the oldest queued frame to RGB565, nearest-neighbor scaled to
- * width x height. dstP and stride (in bytes) must be even.
+ * width x height. Not turned, shrinking to between half and full size
+ * averages the luma instead, and growing by exactly 4 to 5 interpolates
+ * it by area. dstP and stride (in bytes) must be even.
  * Frames wider than DEC_RGB_MAX_SOURCE are rejected.
  * With DEC_RGB_TURN, the picture goes a quarter turn clockwise, for a
  * screen held in landscape: each of its rows runs down a screen column,

@@ -75,7 +75,7 @@ FFMPEG_ARM := $(DEPS)/ffmpeg-build-arm
 FFMPEG_HOST := $(DEPS)/ffmpeg-build-host
 ARM_INCLUDES := -Isrc/arm -I$(DEPS)/ffmpeg -I$(FFMPEG_ARM)
 ARM_OBJECTS := $(ARM_DIR)/entry.o $(ARM_DIR)/dispatch.o $(ARM_DIR)/decoder.o \
-	$(ARM_DIR)/sound.o $(ARM_DIR)/libc.o $(ARM_DIR)/ffstubs.o \
+	$(ARM_DIR)/rgb.o $(ARM_DIR)/sound.o $(ARM_DIR)/libc.o $(ARM_DIR)/ffstubs.o \
 	$(ARM_DIR)/memtest.o
 ARM_LIB_FILES := $(FFMPEG_ARM)/libavcodec/libavcodec.a $(FFMPEG_ARM)/libavutil/libavutil.a \
 	$(DEPS)/musl-build-arm/libm.a
@@ -336,16 +336,16 @@ test: $(JSON_DUMP) $(UNIT_TESTS) $(PVIEW) $(STREAM_TEST) $(FEED_TEST) $(RGB_TEST
 
 BENCH_HOST := $(HOST_DIR)/bench
 
-$(RGB_TEST): host/tests/rgb_test.c src/arm/decoder.c src/arm/decoder.h \
-		$(FFMPEG_HOST)/libavcodec/libavcodec.a $(FFMPEG_HOST)/libavutil/libavutil.a | $(HOST_DIR)
+$(RGB_TEST): host/tests/rgb_test.c src/arm/rgb.c src/arm/rgb.h src/arm/decoder.h | $(HOST_DIR)
 	$(HOST_CC) $(HOST_FLAGS) -Isrc/arm -I$(DEPS)/ffmpeg -I$(FFMPEG_HOST) \
-		host/tests/rgb_test.c $(FFMPEG_HOST)/libavcodec/libavcodec.a \
-		$(FFMPEG_HOST)/libavutil/libavutil.a -lm -o $@
+		host/tests/rgb_test.c -lm -o $@
 
-$(BENCH_HOST): host/bench.c src/core/mp4_read.c src/arm/decoder.c $(wildcard src/core/*.h) \
-		src/arm/decoder.h $(FFMPEG_HOST)/libavcodec/libavcodec.a | $(HOST_DIR)
+$(BENCH_HOST): host/bench.c src/core/mp4_read.c src/arm/decoder.c src/arm/rgb.c \
+		$(wildcard src/core/*.h) src/arm/decoder.h src/arm/rgb.h \
+		$(FFMPEG_HOST)/libavcodec/libavcodec.a | $(HOST_DIR)
 	$(HOST_CC) -std=gnu11 -Wall -Wextra -O2 -g -Ihost/shim -Isrc/core -Isrc/arm \
 		-I$(DEPS)/ffmpeg -I$(FFMPEG_HOST) host/bench.c src/core/mp4_read.c src/arm/decoder.c \
+		src/arm/rgb.c \
 		$(FFMPEG_HOST)/libavcodec/libavcodec.a $(FFMPEG_HOST)/libavutil/libavutil.a -lm -o $@
 
 PLAYBACK_SIM := $(HOST_DIR)/playback_sim
@@ -354,7 +354,7 @@ PLAYBACK_SIM := $(HOST_DIR)/playback_sim
 # versions next to it, so a copy is built beside the host stand-ins.
 $(PLAYBACK_SIM): host/tests/playback_sim.c src/palm/playback.c src/palm/playback.h \
 		src/core/mp4_read.c src/core/mp4_stream.c src/core/mp4_frag.c \
-		src/arm/decoder.c src/arm/sound.c src/arm/sound.h \
+		src/arm/decoder.c src/arm/rgb.c src/arm/sound.c src/arm/sound.h \
 		$(wildcard host/tests/playsim/*.h) $(FFMPEG_HOST)/libavcodec/libavcodec.a | $(HOST_DIR)
 	mkdir -p $(HOST_DIR)/playsim
 	cp src/palm/playback.c src/palm/playback.h $(HOST_DIR)/playsim/
@@ -363,7 +363,7 @@ $(PLAYBACK_SIM): host/tests/playback_sim.c src/palm/playback.c src/palm/playback
 		-Ihost/shim -Isrc/core -Isrc/arm -I$(DEPS)/ffmpeg -I$(FFMPEG_HOST) \
 		host/tests/playback_sim.c $(HOST_DIR)/playsim/playback.c src/core/mp4_read.c \
 		src/core/mp4_stream.c src/core/mp4_frag.c \
-		src/arm/decoder.c src/arm/sound.c $(FFMPEG_HOST)/libavcodec/libavcodec.a \
+		src/arm/decoder.c src/arm/rgb.c src/arm/sound.c $(FFMPEG_HOST)/libavcodec/libavcodec.a \
 		$(FFMPEG_HOST)/libavutil/libavutil.a -lm -o $@
 
 # Plays each downloaded test video against a simulated Palm TX clock, then
