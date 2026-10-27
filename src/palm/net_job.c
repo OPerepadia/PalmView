@@ -11,6 +11,8 @@
 #define POLL_RETRY_DIVISOR 4
 /* Steps that take longer than this are logged. */
 #define SLOW_STEP_MS 100
+/* New connections tried when one is reset before TLS starts */
+#define MAX_RECONNECTS 2
 
 /* Log lines for the phase just finished, by NetJobPhase */
 static const Char kPhaseLines[5][16] = {
@@ -40,7 +42,9 @@ struct NetJob {
     void *bodyContextP;
     HttpParser parser;
     NetHostInfoBufType hostBuffer;
+    NetHostInfoPtr hostInfoP;
     NetSocketAddrINType address;
+    UInt16 addressIndex, reconnects;
     UInt16 state;
     NetSocketRef socket;
     UInt32 sessionId;
@@ -139,20 +143,13 @@ static void CloseTls(NetJob *jobP, Boolean cancel)
             &result);
 }
 
-static UInt16 Finish(NetJob **jobPP)
+static void CloseConnection(NetJob *jobP, Boolean cancel)
 {
-    NetJob *jobP = *jobPP;
-    NetJobResult *r = jobP->resultP;
     Err error = errNone;
-    Boolean cancel = r->status != netJobOk;
-    UdpLogLine(jobP->config.logP, jobP->tagP, "end % http % got %", r->status,
-        r->httpStatus, r->received);
-    if (r->status != netJobOk && r->status != netJobCancelled)
-        UdpLogLine(jobP->config.logP, jobP->tagP, "fail net $ tls %/-%",
-            r->netError, r->tlsStatus,
-            r->tlsError < 0 ? (UInt32)-r->tlsError : (UInt32)r->tlsError);
     if (jobP->tlsOpen) CloseTls(jobP, cancel);
     else if (jobP->sessionId != 0) CloseTls(jobP, true);
+    jobP->tlsOpen = false;
+    jobP->sessionId = 0;
     if (jobP->socket >= 0) {
         /* Reset rather than close politely: the TX holds a closed
          * connection for minutes, and after a few it cannot open more
@@ -165,7 +162,21 @@ static UInt16 Finish(NetJob **jobPP)
             sizeof(linger), jobP->config.stepTimeoutTicks, &error);
         NetLibSocketClose(jobP->config.netRefNum, jobP->socket,
             jobP->config.stepTimeoutTicks, &error);
+        jobP->socket = -1;
     }
+}
+
+static UInt16 Finish(NetJob **jobPP)
+{
+    NetJob *jobP = *jobPP;
+    NetJobResult *r = jobP->resultP;
+    UdpLogLine(jobP->config.logP, jobP->tagP, "end % http % got %", r->status,
+        r->httpStatus, r->received);
+    if (r->status != netJobOk && r->status != netJobCancelled)
+        UdpLogLine(jobP->config.logP, jobP->tagP, "fail net $ tls %/-%",
+            r->netError, r->tlsStatus,
+            r->tlsError < 0 ? (UInt32)-r->tlsError : (UInt32)r->tlsError);
+    CloseConnection(jobP, r->status != netJobOk);
     MemPtrFree(jobP);
     *jobPP = 0;
     return netJobFinished;
@@ -178,10 +189,37 @@ static UInt16 NetworkFailure(NetJob **jobPP, Err error)
     return Finish(jobPP);
 }
 
+static void UseAddress(NetJob *jobP)
+{
+    MemSet(&jobP->address, sizeof(jobP->address), 0);
+    jobP->address.family = netSocketAddrINET;
+    jobP->address.port = NetHToNS(443);
+    MemMove(&jobP->address.addr, jobP->hostInfoP->addrListP[jobP->addressIndex],
+        sizeof(jobP->address.addr));
+}
+
+/* A new connection that is reset before TLS can start tends to work
+ * on the next try, and often with the next address. */
+static Boolean Reconnect(NetJob *jobP)
+{
+    if ((jobP->state != jobStateTlsOpen && jobP->state != jobStateTlsHandshake) ||
+            jobP->reconnects >= MAX_RECONNECTS)
+        return false;
+    jobP->reconnects++;
+    CloseConnection(jobP, true);
+    if (jobP->hostInfoP->addrListP[++jobP->addressIndex] == 0)
+        jobP->addressIndex = 0;
+    UseAddress(jobP);
+    jobP->state = jobStateSocket;
+    return true;
+}
+
 static UInt16 TlsFailure(NetJob **jobPP, Err error, UInt16 tlsStatus,
                          Int16 tlsError, UInt16 netError)
 {
     NetJobResult *resultP = (*jobPP)->resultP;
+    if (netError == netErrSocketNotConnected && Reconnect(*jobPP))
+        return netJobRunning;
     resultP->status = netJobTlsError;
     resultP->platformError = error;
     resultP->tlsStatus = tlsStatus;
@@ -400,11 +438,8 @@ static UInt16 Step(NetJob **jobPP)
                 jobP->config.stepTimeoutTicks, &error);
             if (hostInfoP != 0 && hostInfoP->addrListP != 0 &&
                 hostInfoP->addrListP[0] != 0) {
-                MemSet(&jobP->address, sizeof(jobP->address), 0);
-                jobP->address.family = netSocketAddrINET;
-                jobP->address.port = NetHToNS(443);
-                MemMove(&jobP->address.addr, hostInfoP->addrListP[0],
-                    sizeof(jobP->address.addr));
+                jobP->hostInfoP = hostInfoP;
+                UseAddress(jobP);
                 jobP->state = jobStateSocket;
                 return netJobRunning;
             }

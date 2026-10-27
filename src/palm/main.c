@@ -2240,6 +2240,7 @@ static void StepPlayback(AppState *s)
             UdpLogLine(s->logP, tagP, "level %, late %, peak net % ms",
                 p->level, p->lateTotal,
                 p->peakNet * 1000UL / SysTicksPerSecond());
+            UdpLogLine(s->logP, tagP, "net busy %", p->netPercent, 0, 0);
             if (s->logP != 0) {
                 UInt32 used, peak;
                 PlaybackArenaUse(p, &used, &peak);
