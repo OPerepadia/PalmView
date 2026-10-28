@@ -36,6 +36,7 @@
 #define SavedBackButton 1403
 #define SavedPlayButton 1404
 #define SavedDeleteButton 1405
+#define SavedInfoField 1406
 
 #define PlayForm 1500
 #define PlayVideoGadget 1501

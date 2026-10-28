@@ -7,6 +7,7 @@
 
 #include "detail.h"
 #include "resource.h"
+#include "saved.h"
 #include "thumbs.h"
 
 /* The details form's layout at 160 high, from app.rcp */
@@ -95,7 +96,7 @@ static void AppendTwoLines(const TextCodec *codecP, Char *dstP,
 /* The chosen quality, or the one YouTube offers instead */
 UInt16 VideoChoice(const AppState *s)
 {
-    const YtFormat *formatP = YtPlayerVideo(s->playerP, s->prefs.quality);
+    const YtFormat *formatP = YtPlayerVideo(s->playerP, s->quality);
     return formatP != 0 ? (UInt16)(formatP - s->playerP->video) : quality144;
 }
 
@@ -159,7 +160,8 @@ void RefreshDetail(AppState *s)
     SetFieldText(InfoField, s->info);
     UpdateInfoScrollBar();
     SetFieldText(ProgressField, s->progress);
-    ShowObject(DownloadButton, idle && YtPlayerPlayable(s->playerP));
+    ShowObject(DownloadButton, idle && YtPlayerPlayable(s->playerP) &&
+        !(s->saved && s->quality == s->savedQuality));
     ShowObject(CancelButton, s->task == taskDownload);
     ShowObject(PlayButton, idle && (s->saved || YtPlayerPlayable(s->playerP)));
     ShowDetailQuality(s, idle);
@@ -167,13 +169,43 @@ void RefreshDetail(AppState *s)
     ShowDetailThumb(s);
 }
 
-/* The stream sizes follow the quality chosen. */
+/* "Saved: 240p, 9.8 MB.", or a note that downloading the other quality
+ * replaces the saved copy */
+static void DescribeSavedCopy(AppState *s)
+{
+    Char *dstP = s->progress;
+    UInt16 capacity = sizeof(s->progress);
+    dstP[0] = '\0';
+    if (!s->saved) return;
+    if (s->quality == s->savedQuality) {
+        StrCopy(dstP, "Saved: ");
+        Append(dstP, capacity, kQualityNames[s->savedQuality]);
+        Append(dstP, capacity, ", ");
+        AppendSize(dstP, capacity, s->savedSize);
+        Append(dstP, capacity, ".");
+    } else {
+        StrCopy(dstP, "The ");
+        Append(dstP, capacity, kQualityNames[s->savedQuality]);
+        Append(dstP, capacity, " version is saved. Downloading ");
+        Append(dstP, capacity, kQualityNames[VideoChoice(s)]);
+        Append(dstP, capacity, " replaces it.");
+    }
+}
+
+/* The stream sizes and the saved copy's line follow the quality chosen. */
+void RefreshDetailChoice(AppState *s)
+{
+    BuildInfo(s);
+    DescribeSavedCopy(s);
+    RefreshDetail(s);
+}
+
 void SwitchDetailQuality(AppState *s, UInt16 choice)
 {
+    s->quality = choice;
     s->prefs.quality = choice;
     s->prefsChanged = true;
-    BuildInfo(s);
-    RefreshDetail(s);
+    RefreshDetailChoice(s);
 }
 
 void MakeOutPath(AppState *s)
@@ -185,15 +217,24 @@ void MakeOutPath(AppState *s)
     StoreMakePath(s->outPath, name);
 }
 
-static Boolean OutFileExists(AppState *s)
+/* Looks for outPath on the card. When it is there, its quality is chosen. */
+void FindSavedCopy(AppState *s)
 {
-    FileRef file;
-    UInt32 size = 0;
-    if (StoreOpenVolume(&s->volume) != errNone ||
-        StoreOpenRead(s->volume, s->outPath, &file, &size) != errNone)
-        return false;
-    VFSFileClose(file);
-    return size != 0;
+    SavedVideo video;
+    s->saved = ReadSavedVideo(s->outPath, &video) && video.size != 0;
+    if (!s->saved) return;
+    s->savedQuality = SavedQuality(&video);
+    s->savedSize = video.size;
+    s->quality = s->savedQuality;
+}
+
+/* The saved copy plays when its quality is chosen. */
+void PlayDetail(AppState *s)
+{
+    StopThumbs(s);
+    if (s->saved && s->quality == s->savedQuality) StrCopy(s->playPath, s->outPath);
+    else s->playPath[0] = '\0';
+    FrmPopupForm(PlayForm);
 }
 
 void StartPlayer(AppState *s)
@@ -202,6 +243,7 @@ void StartPlayer(AppState *s)
     FreeBitmap(&s->detailThumbP, &s->detailBitsP);
     YtPlayerInit(s->playerP, kVideoItags, kAudioItags, &s->codec);
     s->percent = 0;
+    s->quality = s->prefs.quality;
     s->saved = false;
     BuildInfo(s);
     JsonScanInit(&s->scanner, s->jsonValue, sizeof(s->jsonValue),
@@ -226,12 +268,11 @@ void FinishPlayer(AppState *s)
             DescribeFailure(s, s->progress, sizeof(s->progress));
     } else {
         SaveVisitor(s, playerP->visitor);
-        BuildInfo(s);
+        s->progress[0] = '\0';
         if (YtPlayerPlayable(playerP)) {
             MakeOutPath(s);
-            s->saved = OutFileExists(s);
-            s->progress[0] = '\0';
-            if (s->saved) StrCopy(s->progress, "Already saved.");
+            FindSavedCopy(s);
+            DescribeSavedCopy(s);
         } else if (StrCompare(playerP->status, "OK") != 0) {
             StrCopy(s->progress, "YouTube: ");
             Append(s->progress, sizeof(s->progress), playerP->reason[0] != '\0'
@@ -241,5 +282,6 @@ void FinishPlayer(AppState *s)
         } else {
             StrCopy(s->progress, "No 144p or 240p H.264 + AAC streams offered.");
         }
+        BuildInfo(s);
     }
 }

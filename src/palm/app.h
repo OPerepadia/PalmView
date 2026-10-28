@@ -122,11 +122,15 @@ typedef struct AppState {
     Char info[384];
     Char progress[192];
     UInt16 percent;
+    UInt16 quality;             /* chosen for the selected video */
     Boolean saved;              /* the selected video is on the card */
+    UInt16 savedQuality;
+    UInt32 savedSize;
 
     Char *savedNamesP;          /* MAX_SAVED names, while SavedForm is up */
     UInt16 savedCount;
     Char savedStatus[48];
+    Char savedInfo[32];
 
     Playback *playbackP;        /* while PlayForm is up */
     StreamFeed *feedP;          /* while streaming */
@@ -159,6 +163,7 @@ void AppendNumber(Char *dstP, UInt16 capacity, UInt32 value);
 void AppendHex(Char *dstP, UInt16 capacity, UInt16 value);
 void AppendSize(Char *dstP, UInt16 capacity, UInt32 bytes);
 void AppendSeconds(Char *dstP, UInt16 capacity, UInt32 ticks);
+void AppendClock(Char *dstP, UInt16 capacity, UInt32 ms);
 void SetFieldText(UInt16 fieldId, Char *textP);
 void SetProgressText(AppState *s, const Char *textP);
 void ShowObject(UInt16 id, Boolean visible);

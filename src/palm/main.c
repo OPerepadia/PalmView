@@ -92,6 +92,20 @@ void AppendSeconds(Char *dstP, UInt16 capacity, UInt32 ticks)
     Append(dstP, capacity, " s");
 }
 
+/* "1:05" or "1:02:05" */
+void AppendClock(Char *dstP, UInt16 capacity, UInt32 ms)
+{
+    UInt32 seconds = ms / 1000UL;
+    if (seconds >= 3600UL) {
+        AppendNumber(dstP, capacity, seconds / 3600UL);
+        Append(dstP, capacity, seconds % 3600UL < 600UL ? ":0" : ":");
+        seconds %= 3600UL;
+    }
+    AppendNumber(dstP, capacity, seconds / 60UL);
+    Append(dstP, capacity, seconds % 60UL < 10UL ? ":0" : ":");
+    AppendNumber(dstP, capacity, seconds % 60UL);
+}
+
 void SetFieldText(UInt16 fieldId, Char *textP)
 {
     FieldType *fieldP = (FieldType *)GetObject(fieldId);
@@ -958,7 +972,7 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
             if (eventP->data.lstSelect.listID == SavedList &&
                 eventP->data.lstSelect.selection >= 0 &&
                 (UInt16)eventP->data.lstSelect.selection < s->savedCount) {
-                ShowSavedActions(true);
+                SelectSaved(s);
                 return true;
             }
             break;
@@ -977,12 +991,7 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 case SavedDeleteButton: DeleteSaved(s); return true;
                 /* With no history, nothing pops up. */
                 case HistoryTrigger: return ShowHistory(s) == 0;
-                case PlayButton:
-                    StopThumbs(s);
-                    if (s->saved) StrCopy(s->playPath, s->outPath);
-                    else s->playPath[0] = '\0';
-                    FrmPopupForm(PlayForm);
-                    return true;
+                case PlayButton: PlayDetail(s); return true;
                 case PlayPauseButton: TogglePause(s); return true;
                 case PlayBackButton: ReturnFromPlay(s); return true;
                 default: break;

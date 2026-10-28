@@ -13,8 +13,11 @@ void ScrollInfo(Int16 lines);
 UInt16 VideoChoice(const AppState *s);
 void BuildInfo(AppState *s);
 void RefreshDetail(AppState *s);
+void RefreshDetailChoice(AppState *s);
 void SwitchDetailQuality(AppState *s, UInt16 choice);
 void MakeOutPath(AppState *s);
+void FindSavedCopy(AppState *s);
+void PlayDetail(AppState *s);
 void StartPlayer(AppState *s);
 void FinishPlayer(AppState *s);
 

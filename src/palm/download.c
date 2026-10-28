@@ -170,7 +170,6 @@ void StartDownload(AppState *s)
     StrCat(name, ".audio.mp4");
     StoreMakePath(s->audioPath, name);
     MakeOutPath(s);
-    s->saved = false;
     s->task = taskDownload;
     s->taskStartTicks = TimGetTicks();
     s->sessionStartTicks = s->taskStartTicks;
@@ -265,6 +264,7 @@ static void StartMerge(AppState *s)
     s->task = taskIdle;
     if (result.status != mp4MergeOk) {
         VFSFileDelete(s->volume, s->outPath);
+        s->saved = false;
         StrCopy(s->progress, "Merge failed: status ");
         AppendNumber(s->progress, sizeof(s->progress), result.status);
         Append(s->progress, sizeof(s->progress), ", line ");
@@ -275,7 +275,7 @@ static void StartMerge(AppState *s)
     VFSFileDelete(s->volume, s->videoPath);
     VFSFileDelete(s->volume, s->audioPath);
     s->percent = 100;
-    s->saved = true;
+    FindSavedCopy(s);
     StrCopy(s->progress, "Saved ");
     Append(s->progress, sizeof(s->progress), s->outPath);
     Append(s->progress, sizeof(s->progress), " in ");

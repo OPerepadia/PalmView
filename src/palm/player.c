@@ -26,20 +26,6 @@ static const UInt16 kVolumeGain[VOLUME_LEVELS] = {
     0, 45, 64, 91, 128, 181, 256, 362, 512, 724, 1024
 };
 
-/* "1:05" or "1:02:05" */
-static void AppendClock(Char *dstP, UInt16 capacity, UInt32 ms)
-{
-    UInt32 seconds = ms / 1000UL;
-    if (seconds >= 3600UL) {
-        AppendNumber(dstP, capacity, seconds / 3600UL);
-        Append(dstP, capacity, seconds % 3600UL < 600UL ? ":0" : ":");
-        seconds %= 3600UL;
-    }
-    AppendNumber(dstP, capacity, seconds / 60UL);
-    Append(dstP, capacity, seconds % 60UL < 10UL ? ":0" : ":");
-    AppendNumber(dstP, capacity, seconds % 60UL);
-}
-
 void GetVideoBounds(RectangleType *boundsP)
 {
     FormType *formP = FrmGetActiveForm();
@@ -434,6 +420,7 @@ void SwitchPlayQuality(AppState *s, UInt16 choice)
     Playback *p = s->playbackP;
     UInt32 ms;
     Boolean play;
+    s->quality = choice;
     s->prefs.quality = choice;
     s->prefsChanged = true;
     if (p == 0 || s->feedP == 0 || choice == s->playChoice) return;
@@ -658,8 +645,7 @@ void ReturnFromPlay(AppState *s)
     FrmDrawForm(FrmGetActiveForm());
     if (OnForm(DetailForm)) {
         /* The sizes are for the quality chosen in the player. */
-        BuildInfo(s);
-        RefreshDetail(s);
+        RefreshDetailChoice(s);
         StartThumbs(s);
     }
 }

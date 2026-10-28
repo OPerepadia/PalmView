@@ -48,10 +48,15 @@ You need Palm OS 5, Wi-Fi and an SD card. On the TX:
    progress shows the speed and TLS handshake time.
 4. A downloaded video is saved as `/PalmView/<title>.mp4` on the card. Tap
    **Play** to watch it, or open it in CorePlayer.
+5. When a video is already on the card, its details say which quality, such
+   as `Saved: 240p, 9.8 MB.` The picker starts on that quality, and **Play**
+   opens the saved copy. Pick the other quality to stream it instead.
+   Downloading it overwrites the saved copy.
 
-**Saved** on the main screen lists the videos on the card. Tap one to select
-it, then tap **Play** or **Delete**. In the player, tap **Pause** or the
-5-way centre to pause.
+**Downloads** at the top right of the main screen lists the videos on the
+card. Tap one to select it. A line above the buttons shows its frame size,
+length and file size, such as `426x240 | 7:09 | 9.8 MB`. Then tap **Play**
+or **Delete**. In the player, tap **Pause** or the 5-way centre to pause.
 
 While streaming, the bar under the video shows the position in red and
 what has downloaded in dark gray. Tap or drag on it to jump there, or
