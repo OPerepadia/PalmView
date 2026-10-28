@@ -50,9 +50,14 @@
 /* Level 0 is silent. */
 #define VOLUME_LEVELS 11
 #define VOLUME_DEFAULT 6
-/* Three lines each: the title on up to two, then the details */
-#define RESULT_ROWS 3
-#define RESULT_ROW_HEIGHT 38
+/* Three lines each: the title on up to two, then the details. With the
+ * input area closed there is room for more, and the rows grow to fill it. */
+#define RESULT_ROWS_MIN 3
+#define RESULT_ROW_HEIGHT_MIN 38
+#define RESULT_ROWS_MAX 6
+/* Where the list starts, and what the status line below it takes */
+#define RESULT_TOP 31
+#define RESULT_BOTTOM 14
 /* Leaves room for the title's tab around the text, and beside it for the
  * quality picker when there is one. */
 #define PLAY_TITLE_WIDTH 150
@@ -114,6 +119,8 @@ typedef struct AppState {
     YtPlayer *playerP;
     UInt16 selected;
     UInt16 resultTop;           /* result in the first row */
+    UInt16 resultRows;          /* rows on screen */
+    Coord resultRowHeight;
     UInt16 resultFocus;         /* highlighted result, or NO_RESULT */
 
     JsonScanner scanner;
@@ -694,8 +701,8 @@ static void DrawResultRow(const AppState *s, UInt16 row)
     Coord margin, lineHeight, left, width, y, bottom;
     Char line[80];
     GetResultBounds(&bounds);
-    bounds.topLeft.y += row * RESULT_ROW_HEIGHT;
-    bounds.extent.y = RESULT_ROW_HEIGHT;
+    bounds.topLeft.y += row * s->resultRowHeight;
+    bounds.extent.y = s->resultRowHeight;
     WinPushDrawState();
     coordinates = WinSetCoordinateSystem(kCoordinatesNative);
     WinScaleRectangle(&bounds);
@@ -750,16 +757,16 @@ static void DrawResultRow(const AppState *s, UInt16 row)
 static void DrawResults(const AppState *s)
 {
     UInt16 row;
-    for (row = 0; row < RESULT_ROWS; row++) DrawResultRow(s, row);
+    for (row = 0; row < s->resultRows; row++) DrawResultRow(s, row);
 }
 
 static void ShowResults(AppState *s, Boolean draw)
 {
     UInt16 count = s->searchP->count;
-    UInt16 lastTop = count > RESULT_ROWS ? count - RESULT_ROWS : 0;
+    UInt16 lastTop = count > s->resultRows ? count - s->resultRows : 0;
     if (s->resultTop > lastTop) s->resultTop = lastTop;
     SclSetScrollBar((ScrollBarType *)GetObject(ResultScrollBar),
-        (Int16)s->resultTop, 0, (Int16)lastTop, RESULT_ROWS);
+        (Int16)s->resultTop, 0, (Int16)lastTop, s->resultRows);
     if (draw) DrawResults(s);
 }
 
@@ -775,9 +782,9 @@ static void FocusResult(AppState *s, UInt16 item)
 {
     UInt16 previous = s->resultFocus;
     s->resultFocus = item;
-    if (previous - s->resultTop < RESULT_ROWS)
+    if (previous - s->resultTop < s->resultRows)
         DrawResultRow(s, previous - s->resultTop);
-    if (item != previous && item - s->resultTop < RESULT_ROWS)
+    if (item != previous && item - s->resultTop < s->resultRows)
         DrawResultRow(s, item - s->resultTop);
 }
 
@@ -790,10 +797,10 @@ static void MoveResultFocus(AppState *s, Int16 rows)
     if (s->resultFocus == NO_RESULT) item = (Int16)s->resultTop;
     if (item < 0) item = 0;
     if (item >= (Int16)count) item = (Int16)count - 1;
-    if ((UInt16)item < s->resultTop || (UInt16)item >= s->resultTop + RESULT_ROWS) {
+    if ((UInt16)item < s->resultTop || (UInt16)item >= s->resultTop + s->resultRows) {
         s->resultFocus = (UInt16)item;
         s->resultTop = (UInt16)item < s->resultTop
-            ? (UInt16)item : (UInt16)item - RESULT_ROWS + 1;
+            ? (UInt16)item : (UInt16)item - s->resultRows + 1;
         ShowResults(s, true);
     } else {
         FocusResult(s, (UInt16)item);
@@ -818,7 +825,7 @@ static UInt16 ResultAt(const AppState *s, const RectangleType *boundsP,
 {
     UInt16 item;
     if (!RctPtInRectangle(x, y, boundsP)) return NO_RESULT;
-    item = s->resultTop + (UInt16)(y - boundsP->topLeft.y) / RESULT_ROW_HEIGHT;
+    item = s->resultTop + (UInt16)(y - boundsP->topLeft.y) / s->resultRowHeight;
     return item < s->searchP->count ? item : NO_RESULT;
 }
 
@@ -862,6 +869,81 @@ static Boolean ResultGadgetHandler(FormGadgetTypeInCallback *gadgetP,
         return true;
     }
     return false;
+}
+
+static Boolean HasInputArea(void)
+{
+    UInt32 version;
+    return FtrGet(pinCreator, pinFtrAPIVersion, &version) == errNone;
+}
+
+/* The form resizes with the input area, in LayoutMainForm and
+ * LayoutDetailForm. */
+static void UseWholeScreen(FormType *formP)
+{
+    if (!HasInputArea()) return;
+    FrmSetDIAPolicyAttr(formP, frmDIAPolicyCustom);
+    WinSetConstraintsSize(FrmGetWindowHandle(formP), 160, 240, 240, 160, 160, 160);
+}
+
+/* The user decides whether the input area is open, once for every screen
+ * that resizes. The system remembers the choice, but forms that do not
+ * resize, like the player's, open the area meanwhile; each form puts the
+ * user's choice back when it comes up. */
+static void EnterInputArea(void)
+{
+    if (!HasInputArea()) return;
+    PINSetInputTriggerState(pinInputTriggerEnabled);
+    PINSetInputAreaState(pinInputAreaUser);
+}
+
+/* The forms that follow the input area */
+static Boolean IsWholeScreenForm(UInt16 formId)
+{
+    return formId == MainForm || formId == DetailForm || formId == SavedForm ||
+        formId == PlayForm;
+}
+
+static void SetObjectY(FormType *formP, UInt16 index, Coord y, Coord height)
+{
+    RectangleType bounds;
+    FrmGetObjectBounds(formP, index, &bounds);
+    bounds.topLeft.y = y;
+    if (height != 0) bounds.extent.y = height;
+    FrmSetObjectBounds(formP, index, &bounds);
+}
+
+/* Fits the form to the screen: the list takes the space above the status
+ * line, in whole rows that grow to fill it. The input area opening or
+ * closing changes the screen's height. */
+static void LayoutMainForm(AppState *s)
+{
+    FormType *formP = FrmGetActiveForm();
+    RectangleType bounds;
+    Coord width, height, listHeight;
+    UInt16 i, rows;
+    if (!HasInputArea()) return;
+    WinGetDisplayExtent(&width, &height);
+    RctSetRectangle(&bounds, 0, 0, width, height);
+    WinSetBounds(FrmGetWindowHandle(formP), &bounds);
+    listHeight = height - RESULT_TOP - RESULT_BOTTOM;
+    rows = (UInt16)(listHeight / RESULT_ROW_HEIGHT_MIN);
+    if (rows < RESULT_ROWS_MIN) rows = RESULT_ROWS_MIN;
+    if (rows > RESULT_ROWS_MAX) rows = RESULT_ROWS_MAX;
+    s->resultRows = rows;
+    s->resultRowHeight = listHeight / (Coord)rows;
+    listHeight = s->resultRowHeight * (Coord)rows;
+    SetObjectY(formP, FrmGetObjectIndex(formP, ResultGadget), RESULT_TOP, listHeight);
+    SetObjectY(formP, FrmGetObjectIndex(formP, ResultScrollBar), RESULT_TOP, listHeight);
+    SetObjectY(formP, FrmGetObjectIndex(formP, StatusField),
+        height - RESULT_BOTTOM, 0);
+    for (i = 0; i < FrmGetNumberOfObjects(formP); i++)
+        if (FrmGetObjectType(formP, i) == frmGraffitiStateObj) {
+            Coord x, y;
+            FrmGetObjectPosition(formP, i, &x, &y);
+            FrmSetObjectPosition(formP, i, x, height - RESULT_BOTTOM + 1);
+        }
+    ShowResults(s, false);
 }
 
 static void InitMainForm(AppState *s)
@@ -954,6 +1036,45 @@ static void FinishSearch(AppState *s)
 }
 
 /* Detail form */
+
+/* The details form's layout at 160 high, from app.rcp */
+#define DETAIL_HEIGHT 160
+#define DETAIL_LINE 11
+#define DETAIL_INFO_Y 53
+#define DETAIL_INFO_HEIGHT 33
+#define DETAIL_PROGRESS_Y 94
+#define DETAIL_BAR_Y 131
+#define DETAIL_BUTTONS_Y 145
+
+/* Fits the form to the screen: the info text grows by whole lines, and
+ * the progress bar and buttons stay at the bottom. */
+static void LayoutDetailForm(void)
+{
+    static const UInt16 kButtonIds[] = {
+        PlayButton, DownloadButton, CancelButton, BackButton
+    };
+    FormType *formP = FrmGetActiveForm();
+    RectangleType bounds;
+    Coord width, height, extra, grow;
+    UInt16 i;
+    if (!HasInputArea()) return;
+    WinGetDisplayExtent(&width, &height);
+    RctSetRectangle(&bounds, 0, 0, width, height);
+    WinSetBounds(FrmGetWindowHandle(formP), &bounds);
+    extra = height > DETAIL_HEIGHT ? height - DETAIL_HEIGHT : 0;
+    grow = extra / DETAIL_LINE * DETAIL_LINE;
+    SetObjectY(formP, FrmGetObjectIndex(formP, InfoField), DETAIL_INFO_Y,
+        DETAIL_INFO_HEIGHT + grow);
+    SetObjectY(formP, FrmGetObjectIndex(formP, InfoScrollBar), DETAIL_INFO_Y,
+        DETAIL_INFO_HEIGHT + grow);
+    SetObjectY(formP, FrmGetObjectIndex(formP, ProgressField),
+        DETAIL_PROGRESS_Y + grow, 0);
+    SetObjectY(formP, FrmGetObjectIndex(formP, ProgressGadget),
+        DETAIL_BAR_Y + extra, 0);
+    for (i = 0; i < sizeof(kButtonIds) / sizeof(kButtonIds[0]); i++)
+        SetObjectY(formP, FrmGetObjectIndex(formP, kButtonIds[i]),
+            DETAIL_BUTTONS_Y + extra, 0);
+}
 
 static void UpdateInfoScrollBar(void)
 {
@@ -1092,7 +1213,7 @@ static UInt16 NextThumb(const AppState *s)
         return s->thumbs[s->selected].state == thumbMissing
             ? s->selected : NO_RESULT;
     if (!OnForm(MainForm)) return NO_RESULT;
-    for (i = s->resultTop; i < s->resultTop + RESULT_ROWS && i < count; i++)
+    for (i = s->resultTop; i < s->resultTop + s->resultRows && i < count; i++)
         if (s->thumbs[i].state == thumbMissing) return i;
     for (i = 0; i < count; i++)
         if (s->thumbs[i].state == thumbMissing) return i;
@@ -1156,7 +1277,7 @@ static void StoreThumb(AppState *s, UInt16 item)
     }
     thumbP->state = thumbLoaded;
     if (OnForm(MainForm) && item >= s->resultTop &&
-            (UInt16)(item - s->resultTop) < RESULT_ROWS)
+            (UInt16)(item - s->resultTop) < s->resultRows)
         DrawResultRow(s, item - s->resultTop);
     if (OnForm(DetailForm) && item == s->selected) ShowDetailThumb(s);
 }
@@ -1658,9 +1779,42 @@ static void DeleteSaved(AppState *s)
     SetFieldText(SavedStatusField, s->savedStatus);
 }
 
+/* The saved videos form at 160 high, from app.rcp */
+#define SAVED_HEIGHT 160
+#define SAVED_ITEMS 11
+#define SAVED_ROW 11
+#define SAVED_BUTTONS_Y 145
+#define SAVED_STATUS_Y 146
+
+/* Fits the form to the screen: the list shows more rows, and the buttons
+ * stay at the bottom. */
+static void LayoutSavedForm(void)
+{
+    static const UInt16 kButtonIds[] = {
+        SavedPlayButton, SavedDeleteButton, SavedBackButton
+    };
+    FormType *formP = FrmGetActiveForm();
+    RectangleType bounds;
+    Coord width, height, extra;
+    UInt16 i;
+    if (!HasInputArea()) return;
+    WinGetDisplayExtent(&width, &height);
+    RctSetRectangle(&bounds, 0, 0, width, height);
+    WinSetBounds(FrmGetWindowHandle(formP), &bounds);
+    extra = height > SAVED_HEIGHT ? height - SAVED_HEIGHT : 0;
+    LstSetHeight((ListType *)GetObject(SavedList),
+        (Int16)(SAVED_ITEMS + extra / SAVED_ROW));
+    SetObjectY(formP, FrmGetObjectIndex(formP, SavedStatusField),
+        SAVED_STATUS_Y + extra, 0);
+    for (i = 0; i < sizeof(kButtonIds) / sizeof(kButtonIds[0]); i++)
+        SetObjectY(formP, FrmGetObjectIndex(formP, kButtonIds[i]),
+            SAVED_BUTTONS_Y + extra, 0);
+}
+
 static void ReturnFromSaved(AppState *s)
 {
     FrmReturnToForm(MainForm);
+    LayoutMainForm(s);
     FrmDrawForm(FrmGetActiveForm());
     ShowResults(s, true);
     if (s->savedNamesP != 0) MemPtrFree(s->savedNamesP);
@@ -2262,10 +2416,44 @@ static Boolean TrackSeekBar(AppState *s, const EventType *eventP)
     return true;
 }
 
+/* The player form at 160 high, from app.rcp */
+#define PLAY_HEIGHT 160
+#define PLAY_LINE 11
+#define PLAY_STATUS_Y 111
+#define PLAY_STATUS_HEIGHT 33
+#define PLAY_BUTTONS_Y 145
+#define PLAY_VOLUME_Y 147
+
+/* Fits the form to the screen: the picture and seek bar stay at the top,
+ * the status text gets the extra lines, and the controls move to the
+ * bottom. */
+static void LayoutPlayForm(void)
+{
+    static const UInt16 kButtonIds[] = { PlayPauseButton, PlayBackButton };
+    FormType *formP = FrmGetActiveForm();
+    RectangleType bounds;
+    Coord width, height, extra;
+    UInt16 i;
+    if (!HasInputArea()) return;
+    WinGetDisplayExtent(&width, &height);
+    RctSetRectangle(&bounds, 0, 0, width, height);
+    WinSetBounds(FrmGetWindowHandle(formP), &bounds);
+    extra = height > PLAY_HEIGHT ? height - PLAY_HEIGHT : 0;
+    SetObjectY(formP, FrmGetObjectIndex(formP, PlayStatusField), PLAY_STATUS_Y,
+        PLAY_STATUS_HEIGHT + extra / PLAY_LINE * PLAY_LINE);
+    SetObjectY(formP, FrmGetObjectIndex(formP, PlayVolumeGadget),
+        PLAY_VOLUME_Y + extra, 0);
+    for (i = 0; i < sizeof(kButtonIds) / sizeof(kButtonIds[0]); i++)
+        SetObjectY(formP, FrmGetObjectIndex(formP, kButtonIds[i]),
+            PLAY_BUTTONS_Y + extra, 0);
+}
+
 static void ReturnFromPlay(AppState *s)
 {
     ClosePlayback(s);
     FrmReturnToForm(0);
+    if (OnForm(DetailForm)) LayoutDetailForm();
+    else if (OnForm(SavedForm)) LayoutSavedForm();
     FrmDrawForm(FrmGetActiveForm());
     if (OnForm(DetailForm)) {
         /* The sizes are for the quality chosen in the player. */
@@ -2401,6 +2589,7 @@ static void ReturnToMain(AppState *s)
     StopThumbs(s);
     FreeBitmap(&s->detailThumbP, &s->detailBitsP);
     FrmReturnToForm(MainForm);
+    LayoutMainForm(s);
     FrmDrawForm(FrmGetActiveForm());
     ShowResults(s, true);
     StartThumbs(s);
@@ -2456,7 +2645,29 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
     FormType *formP;
     /* Not one of eventsEnum's values, so not a case below. */
     if (eventP->eType == winDisplayChangedEvent) {
-        if (OnForm(FullForm)) FillFullScreen(s);
+        if (OnForm(FullForm)) {
+            FillFullScreen(s);
+        } else if (OnForm(MainForm)) {
+            LayoutMainForm(s);
+            FrmDrawForm(FrmGetActiveForm());
+        } else if (OnForm(DetailForm)) {
+            LayoutDetailForm();
+            FrmDrawForm(FrmGetActiveForm());
+            RefreshDetail(s);
+        } else if (OnForm(SavedForm)) {
+            LayoutSavedForm();
+            FrmDrawForm(FrmGetActiveForm());
+        } else if (OnForm(PlayForm)) {
+            LayoutPlayForm();
+            FrmDrawForm(FrmGetActiveForm());
+            ClearVideoArea();
+            DrawSeekBar(s);
+            DrawVolume(s);
+            if (s->playbackP != 0) {
+                AttachPlayScreen(s);
+                s->playWait = 0;
+            }
+        }
         return false;
     }
     switch (eventP->eType) {
@@ -2465,20 +2676,32 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
             return false;
         case frmLoadEvent:
             formP = FrmInitForm(eventP->data.frmLoad.formID);
+            /* Before the form is active: the system opens the input area for
+             * a form that has not said it handles it. */
+            if (IsWholeScreenForm(eventP->data.frmLoad.formID))
+                UseWholeScreen(formP);
             FrmSetActiveForm(formP);
             return true;
         case frmOpenEvent:
             if (OnForm(MainForm)) {
                 InitMainForm(s);
+                EnterInputArea();
+                LayoutMainForm(s);
                 FrmDrawForm(FrmGetActiveForm());
             } else if (OnForm(SavedForm)) {
+                EnterInputArea();
+                LayoutSavedForm();
                 OpenSavedForm(s);
                 FrmDrawForm(FrmGetActiveForm());
             } else if (OnForm(PlayForm)) {
+                EnterInputArea();
+                LayoutPlayForm();
                 OpenPlayForm(s);
             } else if (OnForm(FullForm)) {
                 OpenFullForm(s);
             } else if (OnForm(DetailForm)) {
+                EnterInputArea();
+                LayoutDetailForm();
                 FrmSetFocus(FrmGetActiveForm(), noFocus);
                 ShowObject(DownloadButton, false);
                 ShowObject(PlayButton, false);
@@ -2592,6 +2815,11 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
             }
             break;
         case winEnterEvent:
+            /* Also when a dialog or pop-up closes: there is no frmOpenEvent. */
+            if (IsWholeScreenForm(FrmGetActiveFormID()) &&
+                    eventP->data.winEnter.enterWindow ==
+                    FrmGetWindowHandle(FrmGetActiveForm()))
+                EnterInputArea();
             if (s->playbackP != 0 && s->resumeOnEnter &&
                 IsPlayWindow(s, eventP->data.winEnter.enterWindow)) {
                 s->resumeOnEnter = false;
@@ -2688,6 +2916,8 @@ static Err StartApplication(AppState *s)
         return memErrNotEnoughSpace;
     YtSearchInit(s->searchP, &s->codec);
     s->resultFocus = NO_RESULT;
+    s->resultRows = RESULT_ROWS_MIN;
+    s->resultRowHeight = RESULT_ROW_HEIGHT_MIN;
     s->thumbItem = NO_RESULT;
     YtPlayerInit(s->playerP, kVideoItags, kAudioItags, &s->codec);
     *(Char *)MemHandleLock(s->searchTextH) = '\0';
