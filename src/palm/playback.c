@@ -16,10 +16,12 @@
 /* Frames bigger than 144p are large. 240p peaks near 2.07 MB with two
  * queued frames, at the lowest level, which is all a Palm TX keeps up
  * with. Large video takes the largest chunk less LARGE_RESERVE, and the
- * rest of LARGE_HEAP from another chunk. */
+ * rest of LARGE_HEAP from up to EXTRA_BLOCKS other chunks, since the
+ * heap's free space is often in pieces. */
 #define LARGE_PIXELS (256UL * 144UL)
 #define LARGE_HEAP (2304UL * 1024)
 #define LARGE_RESERVE (64UL * 1024)
+#define EXTRA_MINIMUM (64UL * 1024)
 #define LARGE_QUEUE_DEPTH 2
 #define SHARP_PERCENT 125
 
@@ -333,25 +335,53 @@ static const Char *AllocateArena(Playback *p, Boolean large)
     return 0;
 }
 
-/* Brings the decoder's heap up to LARGE_HEAP with a block from another
- * chunk. A saved file is only known to be large once the arena is made:
- * while the heap is still empty, the arena is made again, larger. */
+static void FreeExtra(Playback *p)
+{
+    while (p->extraCount > 0) MemPtrFree(p->extraP[--p->extraCount]);
+    p->extraSize = 0;
+}
+
+/* Adds blocks to the decoder's heap, each from the largest free chunk,
+ * until it reaches LARGE_HEAP. */
+static Boolean AddExtra(Playback *p)
+{
+    while (p->arenaSize + p->extraSize < LARGE_HEAP && p->extraCount < EXTRA_BLOCKS) {
+        UInt32 freeBytes = 0, maxChunk = 0;
+        UInt32 need = LARGE_HEAP - p->arenaSize - p->extraSize;
+        UInt32 size = need, minimum = need < EXTRA_MINIMUM ? need : EXTRA_MINIMUM;
+        UInt8 *blockP;
+        MemHeapFreeBytes(0, &freeBytes, &maxChunk);
+        if (size > maxChunk) size = maxChunk;
+        if (size < minimum) return false;
+        /* The largest chunk may be a few bytes short of maxChunk. */
+        while ((blockP = (UInt8 *)ArmLargeAlloc(size)) == 0) {
+            size -= size / 16;
+            if (size < minimum) return false;
+        }
+        p->extraP[p->extraCount++] = blockP;
+        p->extraSize += size;
+        Call(p, armCmdHeapAdd, (UInt32)blockP, size, 0, 0);
+    }
+    return p->arenaSize + p->extraSize >= LARGE_HEAP;
+}
+
+/* Brings the decoder's heap up to LARGE_HEAP. A saved file is only known
+ * to be large once the arena is made: while the heap is still empty, the
+ * arena is made again, larger. */
 static const Char *AddLargeHeap(Playback *p)
 {
     const Char *errorP;
-    if (p->extraP != 0 || p->arenaSize >= LARGE_HEAP) return 0;
-    p->extraP = (UInt8 *)ArmLargeAlloc(LARGE_HEAP - p->arenaSize);
-    if (p->extraP == 0 && !p->decoderOpen && !p->ringOpen) {
+    if (p->arenaSize + p->extraSize >= LARGE_HEAP) return 0;
+    if (!AddExtra(p) && !p->decoderOpen && !p->ringOpen) {
+        FreeExtra(p);
         MemPtrFree(p->arenaP);
         p->arenaP = 0;
         errorP = AllocateArena(p, true);
         if (errorP != 0) return errorP;
-        if (p->arenaSize >= LARGE_HEAP) return 0;
-        p->extraP = (UInt8 *)ArmLargeAlloc(LARGE_HEAP - p->arenaSize);
+        AddExtra(p);
     }
-    if (p->extraP == 0) return "Not enough free memory for this video.";
-    p->extraSize = LARGE_HEAP - p->arenaSize;
-    Call(p, armCmdHeapAdd, (UInt32)p->extraP, p->extraSize, 0, 0);
+    if (p->arenaSize + p->extraSize < LARGE_HEAP)
+        return "Not enough free memory for this video.";
     return 0;
 }
 
@@ -559,7 +589,7 @@ void PlaybackClose(Playback *p)
         ArmModuleUnload(&p->module);
     }
     if (p->arenaP != 0) MemPtrFree(p->arenaP);
-    if (p->extraP != 0) MemPtrFree(p->extraP);
+    FreeExtra(p);
     if (p->fileOpen) VFSFileClose(p->file);
     if (p->readerP != 0) MemPtrFree(p->readerP);
     if (p->sampleP != 0) MemPtrFree(p->sampleP);

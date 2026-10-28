@@ -25,6 +25,7 @@
  * start of a segment. */
 
 #define PLAYBACK_LEVELS 4
+#define EXTRA_BLOCKS 4
 
 struct StreamFeed;
 
@@ -33,7 +34,8 @@ typedef struct Playback {
     Boolean moduleLoaded;
     UInt8 *arenaP;
     UInt32 arenaSize;
-    UInt8 *extraP;              /* more decoder heap for large video */
+    UInt8 *extraP[EXTRA_BLOCKS];    /* more decoder heap for large video */
+    UInt16 extraCount;
     UInt32 extraSize;
     UInt32 heapFree;            /* before the arena, for the log */
     UInt32 heapChunk;           /* the largest free chunk then */

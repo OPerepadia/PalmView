@@ -168,7 +168,7 @@ network log below has more.
   to another YouTube server are followed, for downloads too.
 - The two rings share up to 512 KB of the heap, split by bitrate. At 144p
   (about 26 KB/s for both streams) that is about 20 seconds. At 240p the
-  decoder's second block leaves less, about 10 seconds.
+  decoder's extra memory leaves less, about 10 seconds.
 - `src/core/mp4_stream.c` takes each sample out of its ring once all of it
   has arrived. Only the current moof is kept besides the ring.
 - Playback starts with 3 seconds of both streams in. When either runs dry,
@@ -249,8 +249,9 @@ reads a megabyte 2.7 times as fast, but FFmpeg's own prefetches (its
 ARMv5TE build) left decoding as fast as before.
 
 The decoder needs about 2.3 MB for 240p, more than the largest free block
-of a TX's heap. It takes a second block from elsewhere. When there is
-not enough memory for that, PalmView streams 144p instead.
+of a TX's heap. It takes the rest from up to four smaller blocks, since
+free memory is often in pieces. When there is not enough memory for
+that, PalmView streams 144p instead.
 
 In the player, 240p is shrunk by 4 to 3, from 426x240 to 319x180. Each
 picture pixel averages the luma of the source pixels it covers, with
