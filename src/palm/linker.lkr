@@ -23,6 +23,7 @@ SECTIONS
         *yt_api.o(.text .text.* .rodata .rodata.*)
         *json_scan.o(.text .text.* .rodata .rodata.*)
         *thumb.o(.text .text.* .rodata .rodata.*)
+        *player.o(.text .text.* .rodata .rodata.*)
         *tjpgd.o(.text .text.* .rodata .rodata.*)
         . = ALIGN(4);
     } > main2
