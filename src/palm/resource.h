@@ -22,6 +22,8 @@
 #define PlayButton 1108
 #define ThumbGadget 1109
 #define HeadField 1110
+#define DetailQualityTrigger 1111
+#define DetailQualityList 1112
 
 #define MainMenuBar 1200
 #define MenuAbout 1201

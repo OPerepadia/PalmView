@@ -43,8 +43,9 @@ You need Palm OS 5, Wi-Fi and an SD card. On the TX:
    Thumbnails load after the results, those in view first. Tap a result, or
    move to it with 5-way up and down and press the centre, and PalmView
    fetches the stream info.
-3. Tap **Play** to stream it, or **Download** to save it. Download progress
-   shows the speed and TLS handshake time.
+3. When the video comes in both 144p and 240p, pick one at the top right.
+   Then tap **Play** to stream it, or **Download** to save it. Download
+   progress shows the speed and TLS handshake time.
 4. A downloaded video is saved as `/PalmView/<title>.mp4` on the card. Tap
    **Play** to watch it, or open it in CorePlayer.
 

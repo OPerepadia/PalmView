@@ -1196,6 +1196,21 @@ static void ThumbsEnded(AppState *s)
     StartThumbs(s);
 }
 
+/* The quality picker, once YouTube offers both, until a download starts */
+static void ShowDetailQuality(const AppState *s, Boolean idle)
+{
+    const YtPlayer *playerP = s->playerP;
+    Boolean picker = idle && YtPlayerPlayable(playerP) &&
+        playerP->video[quality144].found && playerP->video[quality240].found;
+    if (picker) {
+        CtlSetLabel((ControlType *)GetObject(DetailQualityTrigger),
+            kQualityNames[VideoChoice(s)]);
+        LstSetSelection((ListType *)GetObject(DetailQualityList),
+            (Int16)VideoChoice(s));
+    }
+    ShowObject(DetailQualityTrigger, picker);
+}
+
 static void RefreshDetail(AppState *s)
 {
     Boolean idle = s->task == taskIdle || s->task == taskThumbs;
@@ -1205,10 +1220,20 @@ static void RefreshDetail(AppState *s)
     UpdateInfoScrollBar();
     SetFieldText(ProgressField, s->progress);
     ShowObject(DownloadButton, idle && YtPlayerPlayable(s->playerP));
-    ShowObject(CancelButton, !idle);
+    ShowObject(CancelButton, s->task == taskDownload);
     ShowObject(PlayButton, idle && (s->saved || YtPlayerPlayable(s->playerP)));
+    ShowDetailQuality(s, idle);
     DrawProgressBar(s);
     ShowDetailThumb(s);
+}
+
+/* The stream sizes follow the quality chosen. */
+static void SwitchDetailQuality(AppState *s, UInt16 choice)
+{
+    s->prefs.quality = choice;
+    s->prefsChanged = true;
+    BuildInfo(s);
+    RefreshDetail(s);
 }
 
 static void MakeOutPath(AppState *s)
@@ -1943,7 +1968,7 @@ static const Char *StartPlayback(AppState *s, UInt32 startMs)
 }
 
 /* The quality picker shows what is streaming. */
-static void ShowQuality(const AppState *s)
+static void ShowPlayQuality(const AppState *s)
 {
     CtlSetLabel((ControlType *)GetObject(PlayQualityTrigger),
         kQualityNames[s->playChoice]);
@@ -1977,7 +2002,7 @@ static void StartPlayAt(AppState *s, UInt32 startMs, Boolean play)
         ShowObject(PlayPauseButton, false);
         return;
     }
-    if (s->feedP != 0) ShowQuality(s);
+    if (s->feedP != 0) ShowPlayQuality(s);
     if (s->logP != 0) {
         const Playback *p = s->playbackP;
         UInt32 freeBytes, maxChunk;
@@ -2039,7 +2064,7 @@ static void OpenPlayForm(AppState *s)
     s->skipPending = false;
     if (picker) {
         s->playChoice = VideoChoice(s);
-        ShowQuality(s);
+        ShowPlayQuality(s);
         ShowObject(PlayQualityTrigger, true);
     }
     FrmDrawForm(formP);
@@ -2049,7 +2074,7 @@ static void OpenPlayForm(AppState *s)
 }
 
 /* Streams the chosen quality from where the other one got to. */
-static void SwitchQuality(AppState *s, UInt16 choice)
+static void SwitchPlayQuality(AppState *s, UInt16 choice)
 {
     Playback *p = s->playbackP;
     UInt32 ms;
@@ -2511,10 +2536,16 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
             }
             break;
         case popSelectEvent:
+            if (eventP->data.popSelect.controlID == DetailQualityTrigger) {
+                Int16 selection = eventP->data.popSelect.selection;
+                if (selection >= 0 && selection < YT_VIDEO_CHOICES)
+                    SwitchDetailQuality(s, (UInt16)selection);
+                return true;
+            }
             if (eventP->data.popSelect.controlID == PlayQualityTrigger) {
                 Int16 selection = eventP->data.popSelect.selection;
                 if (selection >= 0 && selection < YT_VIDEO_CHOICES)
-                    SwitchQuality(s, (UInt16)selection);
+                    SwitchPlayQuality(s, (UInt16)selection);
                 return true;
             }
             /* Handled here so the trigger keeps its empty label. */
