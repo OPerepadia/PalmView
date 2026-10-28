@@ -167,14 +167,15 @@ void DescribeResult(const NetJobResult *r, Boolean toCard, Char *dstP,
                     UInt16 capacity);
 void DescribeFailure(const AppState *s, Char *dstP, UInt16 capacity);
 void DrawResultRow(const AppState *s, UInt16 row);
+void ShowResults(AppState *s, Boolean draw);
 Boolean HasInputArea(void);
 void SetObjectY(FormType *formP, UInt16 index, Coord y, Coord height);
+void LayoutMainForm(AppState *s);
 void LayoutDetailForm(void);
 UInt16 VideoChoice(const AppState *s);
 void BuildInfo(AppState *s);
 void RefreshDetail(AppState *s);
 void MakeOutPath(AppState *s);
-void LayoutSavedForm(void);
 Boolean NavPressed(const EventType *eventP, UInt16 bit, UInt16 change);
 
 #endif
