@@ -5,6 +5,7 @@
 
 #include <PalmOS.h>
 
+#include "detail.h"
 #include "download.h"
 #include "mp4_merge.h"
 #include "resource.h"

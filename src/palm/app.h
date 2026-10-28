@@ -35,6 +35,8 @@
 /* Video qualities, in the order of their itags */
 enum { quality144 = 0, quality240 };
 static const Char kQualityNames[YT_VIDEO_CHOICES][5] = { "144p", "240p" };
+static const UInt16 kVideoItags[] = { 160, 133, 0 };
+static const UInt16 kAudioItags[] = { 140, 139, 0 };
 
 typedef enum Task {
     taskIdle = 0,
@@ -163,19 +165,16 @@ void ShowObject(UInt16 id, Boolean visible);
 void DrawProgressBar(const AppState *s);
 Boolean NetworkOpen(AppState *s);
 Err EnsureNetwork(AppState *s);
+void SaveVisitor(AppState *s, const Char *visitorP);
 void DescribeResult(const NetJobResult *r, Boolean toCard, Char *dstP,
                     UInt16 capacity);
 void DescribeFailure(const AppState *s, Char *dstP, UInt16 capacity);
+Boolean StartApiJob(AppState *s, UInt16 task, UInt16 requestLength);
 void DrawResultRow(const AppState *s, UInt16 row);
 void ShowResults(AppState *s, Boolean draw);
 Boolean HasInputArea(void);
 void SetObjectY(FormType *formP, UInt16 index, Coord y, Coord height);
 void LayoutMainForm(AppState *s);
-void LayoutDetailForm(void);
-UInt16 VideoChoice(const AppState *s);
-void BuildInfo(AppState *s);
-void RefreshDetail(AppState *s);
-void MakeOutPath(AppState *s);
 Boolean NavPressed(const EventType *eventP, UInt16 bit, UInt16 change);
 
 #endif

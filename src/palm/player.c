@@ -6,6 +6,7 @@
 #include <PalmOS.h>
 #include <PenInputMgr.h>
 
+#include "detail.h"
 #include "player.h"
 #include "resource.h"
 #include "saved.h"
