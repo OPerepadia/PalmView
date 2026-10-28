@@ -1563,21 +1563,74 @@ static void DrawSavedRow(Int16 itemNum, RectangleType *boundsP,
         boundsP->topLeft.y, boundsP->extent.x - 2);
 }
 
-static void OpenSavedForm(AppState *s)
+static void LoadSaved(AppState *s)
 {
     ListType *listP = (ListType *)GetObject(SavedList);
     UInt16 volume;
-    if (s->savedNamesP == 0)
-        s->savedNamesP = (Char *)MemPtrNew((UInt32)MAX_SAVED * SAVED_NAME_CAPACITY);
     s->savedCount = s->savedNamesP != 0 && StoreOpenVolume(&volume) == errNone
         ? StoreListVideos(volume, s->savedNamesP, SAVED_NAME_CAPACITY, MAX_SAVED)
         : 0;
-    LstSetDrawFunction(listP, DrawSavedRow);
     LstSetListChoices(listP, (Char **)s->savedNamesP, (Int16)s->savedCount);
     LstSetSelection(listP, noListSelection);
-    StrCopy(s->savedStatus, s->savedCount == 0 ? "No saved videos yet."
-        : "Tap a video to play it.");
+}
+
+static const Char *SavedHint(const AppState *s)
+{
+    return s->savedCount == 0 ? "No saved videos yet." : "Select a video.";
+}
+
+static void OpenSavedForm(AppState *s)
+{
+    if (s->savedNamesP == 0)
+        s->savedNamesP = (Char *)MemPtrNew((UInt32)MAX_SAVED * SAVED_NAME_CAPACITY);
+    LstSetDrawFunction((ListType *)GetObject(SavedList), DrawSavedRow);
+    LoadSaved(s);
+    StrCopy(s->savedStatus, SavedHint(s));
     FldSetTextPtr((FieldType *)GetObject(SavedStatusField), s->savedStatus);
+}
+
+/* With a video selected, Play and Delete take the status line's place. */
+static void ShowSavedActions(Boolean selected)
+{
+    ShowObject(SavedStatusField, !selected);
+    ShowObject(SavedPlayButton, selected);
+    ShowObject(SavedDeleteButton, selected);
+}
+
+static void PlaySaved(AppState *s)
+{
+    Int16 row = LstGetSelection((ListType *)GetObject(SavedList));
+    if (row < 0 || (UInt16)row >= s->savedCount) return;
+    StoreMakePath(s->playPath, s->savedNamesP + (UInt32)row * SAVED_NAME_CAPACITY);
+    FrmPopupForm(PlayForm);
+}
+
+/* Asks first. */
+static void DeleteSaved(AppState *s)
+{
+    ListType *listP = (ListType *)GetObject(SavedList);
+    FormType *formP = FrmGetActiveForm();
+    RectangleType bounds;
+    Char name[SAVED_NAME_CAPACITY], path[STORE_PATH_CAPACITY];
+    Int16 row = LstGetSelection(listP);
+    UInt16 volume, length;
+    if (row < 0 || (UInt16)row >= s->savedCount) return;
+    StrCopy(name, s->savedNamesP + (UInt32)row * SAVED_NAME_CAPACITY);
+    StoreMakePath(path, name);
+    length = StrLen(name);
+    if (length > 4) name[length - 4] = '\0';
+    if (FrmCustomAlert(DeleteVideoAlert, name, "", "") != 0) return;
+    if (StoreOpenVolume(&volume) == errNone && VFSFileDelete(volume, path) == errNone) {
+        LoadSaved(s);
+        FrmGetObjectBounds(formP, FrmGetObjectIndex(formP, SavedList), &bounds);
+        WinEraseRectangle(&bounds, 0);
+        LstDrawList(listP);
+        StrCopy(s->savedStatus, s->savedCount == 0 ? SavedHint(s) : "Deleted.");
+    } else {
+        StrCopy(s->savedStatus, "Could not delete.");
+    }
+    ShowSavedActions(false);
+    SetFieldText(SavedStatusField, s->savedStatus);
 }
 
 static void ReturnFromSaved(AppState *s)
@@ -2427,10 +2480,7 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
             if (eventP->data.lstSelect.listID == SavedList &&
                 eventP->data.lstSelect.selection >= 0 &&
                 (UInt16)eventP->data.lstSelect.selection < s->savedCount) {
-                StoreMakePath(s->playPath, s->savedNamesP +
-                    (UInt32)eventP->data.lstSelect.selection * SAVED_NAME_CAPACITY);
-                LstSetSelection((ListType *)GetObject(SavedList), noListSelection);
-                FrmPopupForm(PlayForm);
+                ShowSavedActions(true);
                 return true;
             }
             break;
@@ -2445,6 +2495,8 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                     if (s->task == taskIdle) FrmPopupForm(SavedForm);
                     return true;
                 case SavedBackButton: ReturnFromSaved(s); return true;
+                case SavedPlayButton: PlaySaved(s); return true;
+                case SavedDeleteButton: DeleteSaved(s); return true;
                 /* With no history, nothing pops up. */
                 case HistoryTrigger: return ShowHistory(s) == 0;
                 case PlayButton:

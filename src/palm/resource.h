@@ -32,6 +32,8 @@
 #define SavedList 1401
 #define SavedStatusField 1402
 #define SavedBackButton 1403
+#define SavedPlayButton 1404
+#define SavedDeleteButton 1405
 
 #define PlayForm 1500
 #define PlayVideoGadget 1501
@@ -48,6 +50,7 @@
 #define AboutAlert 1300
 #define LibraryMissingAlert 1301
 #define RomIncompatibleAlert 1302
+#define DeleteVideoAlert 1303
 
 #define TrustCertificates 1000
 #define JisTable 1000

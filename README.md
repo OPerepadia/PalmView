@@ -48,8 +48,9 @@ You need Palm OS 5, Wi-Fi and an SD card. On the TX:
 4. A downloaded video is saved as `/PalmView/<title>.mp4` on the card. Tap
    **Play** to watch it, or open it in CorePlayer.
 
-**Saved** on the main screen lists the videos on the card; tap one to play
-it. In the player, tap **Pause** or the 5-way centre to pause.
+**Saved** on the main screen lists the videos on the card. Tap one to select
+it, then tap **Play** or **Delete**. In the player, tap **Pause** or the
+5-way centre to pause.
 
 While streaming, the bar under the video shows the position in red and
 what has downloaded in dark gray. Tap or drag on it to jump there, or
