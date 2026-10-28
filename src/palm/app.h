@@ -153,21 +153,29 @@ void *GetObject(UInt16 id);
 Boolean OnForm(UInt16 formId);
 void Append(Char *dstP, UInt16 capacity, const Char *textP);
 void AppendNumber(Char *dstP, UInt16 capacity, UInt32 value);
+void AppendHex(Char *dstP, UInt16 capacity, UInt16 value);
+void AppendSize(Char *dstP, UInt16 capacity, UInt32 bytes);
+void AppendSeconds(Char *dstP, UInt16 capacity, UInt32 ticks);
 void SetFieldText(UInt16 fieldId, Char *textP);
+void SetProgressText(AppState *s, const Char *textP);
 void ShowObject(UInt16 id, Boolean visible);
-void DescribeResult(const NetJobResult *r, Boolean toCard, Char *dstP,
-                    UInt16 capacity);
+void DrawProgressBar(const AppState *s);
 Boolean NetworkOpen(AppState *s);
 Err EnsureNetwork(AppState *s);
+void DescribeResult(const NetJobResult *r, Boolean toCard, Char *dstP,
+                    UInt16 capacity);
+void DescribeFailure(const AppState *s, Char *dstP, UInt16 capacity);
+void StopThumbs(AppState *s);
 UInt32 ThumbBytes(const AppState *s);
-void StartThumbs(AppState *s);
-Boolean NavPressed(const EventType *eventP, UInt16 bit, UInt16 change);
 Boolean HasInputArea(void);
 void SetObjectY(FormType *formP, UInt16 index, Coord y, Coord height);
+void LayoutDetailForm(void);
 UInt16 VideoChoice(const AppState *s);
 void BuildInfo(AppState *s);
+void StartThumbs(AppState *s);
 void RefreshDetail(AppState *s);
-void LayoutDetailForm(void);
+void MakeOutPath(AppState *s);
 void LayoutSavedForm(void);
+Boolean NavPressed(const EventType *eventP, UInt16 bit, UInt16 change);
 
 #endif

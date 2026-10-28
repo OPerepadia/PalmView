@@ -45,7 +45,7 @@ HOST_SOURCES := $(CORE_SOURCES) $(TJPGD)/tjpgd.c
 # tools/m68k-veneers.py gives each object long-call veneers for the
 # functions it calls in other files. Data references stay within a file.
 LINK_ORDER := palm/startup palm/arm_module core/mp4_read palm/playback \
-	core/mp4_merge core/mp4_frag palm/store palm/main palm/player core/text core/json_scan core/yt_api \
+	core/mp4_merge core/mp4_frag palm/store palm/main palm/player palm/download core/text core/json_scan core/yt_api \
 	core/thumb palm/net_job core/mp4_stream palm/stream_feed palm/udp_log
 OBJECTS := $(patsubst %,$(BUILD_DIR)/%.o,$(LINK_ORDER)) $(BUILD_DIR)/http.o \
 	$(BUILD_DIR)/tjpgd.o
