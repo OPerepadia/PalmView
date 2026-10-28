@@ -8,6 +8,7 @@
 
 #include "player.h"
 #include "resource.h"
+#include "thumbs.h"
 
 /* 5-way left and right skip about this far, once no press has come for
  * SKIP_DELAY_TICKS: presses in a row add up to one seek. */

@@ -30,6 +30,7 @@
 /* Level 0 is silent. */
 #define VOLUME_LEVELS 11
 #define VOLUME_DEFAULT 6
+#define NO_RESULT 0xFFFF
 
 /* Video qualities, in the order of their itags */
 enum { quality144 = 0, quality240 };
@@ -165,14 +166,12 @@ Err EnsureNetwork(AppState *s);
 void DescribeResult(const NetJobResult *r, Boolean toCard, Char *dstP,
                     UInt16 capacity);
 void DescribeFailure(const AppState *s, Char *dstP, UInt16 capacity);
-void StopThumbs(AppState *s);
-UInt32 ThumbBytes(const AppState *s);
+void DrawResultRow(const AppState *s, UInt16 row);
 Boolean HasInputArea(void);
 void SetObjectY(FormType *formP, UInt16 index, Coord y, Coord height);
 void LayoutDetailForm(void);
 UInt16 VideoChoice(const AppState *s);
 void BuildInfo(AppState *s);
-void StartThumbs(AppState *s);
 void RefreshDetail(AppState *s);
 void MakeOutPath(AppState *s);
 void LayoutSavedForm(void);

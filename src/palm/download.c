@@ -8,6 +8,7 @@
 #include "download.h"
 #include "mp4_merge.h"
 #include "resource.h"
+#include "thumbs.h"
 
 #define CHUNK_BYTES (4UL * 1024UL * 1024UL)
 #define PROGRESS_INTERVAL_TICKS 50
