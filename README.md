@@ -191,11 +191,14 @@ network log below has more.
 - Network calls never wait during playback. The sockets stay non-blocking,
   so TLS does not wait for the rest of a 16 KB record, and a socket is only
   read when it has data. The network gets a turn at least every 20 ms.
-- Smooth streaming needs PalmTLS's faster ARM AES-GCM. It is not merged
-  yet, so `tools/fetch-deps.sh` fetches PalmTLS from the `faster-aes-gcm`
-  branch of [a fork](https://github.com/OPerepadia/palm-tls). With PalmTLS
-  0.1.2, each 16 KB record takes about 100 ms to decrypt, and video drops
-  to half rate.
+- Smooth streaming needs PalmTLS's native ChaCha20-Poly1305. It is not
+  merged yet, so `tools/fetch-deps.sh` fetches PalmTLS from the
+  `chacha20-poly1305` branch of
+  [a fork](https://github.com/OPerepadia/palm-tls). PalmTLS lists the
+  cipher first, and YouTube's servers choose it. With PalmTLS 0.1.2's
+  AES-GCM, each 16 KB record takes about 100 ms to decrypt, and video
+  drops to half rate. With ChaCha20-Poly1305, on a TX at the stock clock,
+  playing 144p, the network takes about 3% of each second.
 
 ### Network log
 
