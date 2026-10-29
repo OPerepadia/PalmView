@@ -73,7 +73,7 @@ void ArmModuleUnload(ArmModule *m)
     MemSet(m, sizeof(*m), 0);
 }
 
-Err ArmModuleLoad(ArmModule *m)
+Err ArmModuleLoad(ArmModule *m, DmResID firstId, UInt32 stackSize)
 {
     UInt8 *headerP, *dataP;
     UInt16 dataChunks, fixupChunks, i;
@@ -81,7 +81,7 @@ Err ArmModuleLoad(ArmModule *m)
     Err error = errNone;
 
     MemSet(m, sizeof(*m), 0);
-    m->headerH = LockResource('armh', 1000, &headerP);
+    m->headerH = LockResource('armh', firstId, &headerP);
     if (headerP == 0) return dmErrResourceNotFound;
     if (Get32(headerP) != HEADER_MAGIC || Get32(headerP + 4) != HEADER_VERSION) {
         error = armErrBadHeader;
@@ -104,7 +104,7 @@ Err ArmModuleLoad(ArmModule *m)
     for (i = 0; i < m->segmentCount; i++) {
         UInt8 *codeP;
         UInt32 size = Get32(headerP + 44 + 8UL * i);
-        m->segmentH[i] = LockResource('armc', (DmResID)(1001 + i), &codeP);
+        m->segmentH[i] = LockResource('armc', (DmResID)(firstId + 1 + i), &codeP);
         if (codeP == 0) {
             error = dmErrResourceNotFound;
             goto fail;
@@ -123,7 +123,8 @@ Err ArmModuleLoad(ArmModule *m)
     }
 
     m->rwBlockP = (UInt8 *)ArmLargeAlloc(m->rwSize + 16);
-    m->stackP = (UInt8 *)ArmLargeAlloc(ARM_STACK_SIZE);
+    m->stackP = (UInt8 *)ArmLargeAlloc(stackSize);
+    m->stackSize = stackSize;
     m->callP = (ArmCall *)MemPtrNew(sizeof(ArmCall));
     if (m->rwBlockP == 0 || m->stackP == 0 || m->callP == 0) {
         error = memErrNotEnoughSpace;
@@ -132,7 +133,7 @@ Err ArmModuleLoad(ArmModule *m)
     m->rwP = (UInt8 *)(((UInt32)m->rwBlockP + 15) & ~15UL);
 
     for (i = 0; i < dataChunks; i++) {
-        MemHandle h = LockResource('armd', (DmResID)(2001 + i), &dataP);
+        MemHandle h = LockResource('armd', (DmResID)(firstId + 1001 + i), &dataP);
         UInt32 size;
         if (dataP == 0) {
             error = dmErrResourceNotFound;
@@ -155,7 +156,7 @@ Err ArmModuleLoad(ArmModule *m)
     MemSet(m->rwP + imageSize, (Int32)(m->rwSize - imageSize), 0);
 
     for (i = 0; i < fixupChunks; i++) {
-        MemHandle h = LockResource('armr', (DmResID)(3001 + i), &dataP);
+        MemHandle h = LockResource('armr', (DmResID)(firstId + 2001 + i), &dataP);
         UInt32 count, k;
         if (dataP == 0) {
             error = dmErrResourceNotFound;
@@ -186,7 +187,7 @@ Err ArmModuleLoad(ArmModule *m)
     MemSet(m->callP, sizeof(ArmCall), 0);
     m->callP->magic = ARM_CALL_MAGIC;
     m->callP->got = (UInt32)m->rwP + gotOffset;
-    m->callP->stackTop = ((UInt32)m->stackP + ARM_STACK_SIZE) & ~7UL;
+    m->callP->stackTop = ((UInt32)m->stackP + m->stackSize) & ~7UL;
     return errNone;
 
 fail:

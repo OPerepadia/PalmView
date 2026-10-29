@@ -47,8 +47,7 @@ HOST_SOURCES := $(CORE_SOURCES) $(TJPGD)/tjpgd.c
 LINK_ORDER := palm/startup palm/arm_module core/mp4_read palm/playback \
 	core/mp4_merge core/mp4_frag palm/store palm/main palm/player palm/download palm/thumbs palm/saved palm/detail core/text core/json_scan core/yt_api \
 	core/thumb palm/net_job core/mp4_stream palm/stream_feed palm/udp_log
-OBJECTS := $(patsubst %,$(BUILD_DIR)/%.o,$(LINK_ORDER)) $(BUILD_DIR)/http.o \
-	$(BUILD_DIR)/tjpgd.o
+OBJECTS := $(patsubst %,$(BUILD_DIR)/%.o,$(LINK_ORDER)) $(BUILD_DIR)/http.o
 FAR_DIR := $(BUILD_DIR)/far
 FAR_OBJECTS := $(patsubst $(BUILD_DIR)/%,$(FAR_DIR)/app/%,$(OBJECTS))
 DEPFILES := $(OBJECTS:.o=.d)
@@ -82,6 +81,13 @@ ARM_LIB_FILES := $(FFMPEG_ARM)/libavcodec/libavcodec.a $(FFMPEG_ARM)/libavutil/l
 ARM_LDFLAGS := -nostdlib -Wl,--gc-sections -Wl,--emit-relocs -Wl,--no-enum-size-warning \
 	-Wl,--no-warn-rwx-segments -Wl,-u,ArmDispatch
 ARM_RCP := $(ARM_DIR)/res/arm.rcp
+# The thumbnail module: TJpgDec on its own, packaged from resource 1100.
+ARMT_DIR := $(ROOT)/build/armthumb
+ARMT_OBJECTS := $(ARMT_DIR)/entry.o $(ARMT_DIR)/thumbmod.o \
+	$(ARMT_DIR)/thumb_decode.o $(ARMT_DIR)/tjpgd.o
+ARMT_FLAGS := $(ARM_CFLAGS) -O2 -std=gnu11 -Wall -Wextra -DJD_FASTDECODE=1 \
+	-Isrc/arm -Isrc/core -I$(TJPGD)
+ARMT_RCP := $(ARMT_DIR)/res/arm.rcp
 
 
 SDK_INCLUDES := -isystem$(SDK) -isystem$(SDK)/Core -isystem$(SDK)/Core/Hardware \
@@ -132,13 +138,14 @@ dist: release bench
 		$(ROOT)/build/release/bench/$(BENCH_ID).prc dist/
 	@ls -l dist
 
-$(BUILD_DIR) $(BUILD_DIR)/core $(BUILD_DIR)/palm $(BUILD_DIR)/bench $(HOST_DIR) $(ARM_DIR) \
+$(BUILD_DIR) $(BUILD_DIR)/core $(BUILD_DIR)/palm $(BUILD_DIR)/bench $(HOST_DIR) $(ARM_DIR) $(ARMT_DIR) \
 		$(TJPGD):
 	@mkdir -p $@
 
-$(RESOURCE_RCP): src/palm/app.rcp $(ARM_RCP) app.mk | $(BUILD_DIR)
+$(RESOURCE_RCP): src/palm/app.rcp $(ARM_RCP) $(ARMT_RCP) app.mk | $(BUILD_DIR)
 	sed 's/@APP_VERSION@/$(APP_VERSION)/g' $< > $@
 	sed 's#"\(arm[a-z]*[0-9]*\.bin\)"#"$(ARM_DIR)/res/\1"#' $(ARM_RCP) >> $@
+	sed 's#"\(arm[a-z]*[0-9]*\.bin\)"#"$(ARMT_DIR)/res/\1"#' $(ARMT_RCP) >> $@
 
 $(BUILD_DIR)/%.o: src/%.c app.mk | $(BUILD_DIR)/core $(BUILD_DIR)/palm $(BUILD_DIR)/bench
 	$(CC) $(COMMON_FLAGS) $(PROFILE_FLAGS) -c $< -o $@
@@ -155,9 +162,6 @@ $(BUILD_DIR)/jis.bin $(HOST_DIR)/jis.bin: tools/jis-table.py
 	@mkdir -p $(dir $@)
 	python3 -I tools/jis-table.py $@
 
-$(BUILD_DIR)/tjpgd.o: $(TJPGD_FILES) | $(BUILD_DIR)
-	$(CC) $(COMMON_FLAGS) $(PROFILE_FLAGS) -c $< -o $@
-$(BUILD_DIR)/core/thumb.o: $(TJPGD_FILES)
 
 # The linker script drops .data and .bss: 68K Palm code resources here have
 # no globals. Fail loudly instead of shipping code that reads garbage.
@@ -279,6 +283,38 @@ $(ARM_RCP): $(ARM_DIR)/pass2.elf tools/armlink.py
 	rm -rf $(ARM_DIR)/res
 	python3 -I tools/armlink.py package $< $(ARM_DIR)/res
 
+$(ARMT_DIR)/entry.o: src/arm/entry.S | $(ARMT_DIR)
+	$(ARM_CC) $(ARM_CFLAGS) -DARM_NO_SOUND -c $< -o $@
+
+$(ARMT_DIR)/thumbmod.o: src/arm/thumbmod.c src/arm/armcall.h src/core/thumb_decode.h | $(ARMT_DIR)
+	$(ARM_CC) $(ARMT_FLAGS) -c $< -o $@
+
+$(ARMT_DIR)/thumb_decode.o: src/core/thumb_decode.c src/core/thumb_decode.h $(TJPGD_FILES) | $(ARMT_DIR)
+	$(ARM_CC) $(ARMT_FLAGS) -c $< -o $@
+
+$(ARMT_DIR)/tjpgd.o: $(TJPGD_FILES) | $(ARMT_DIR)
+	$(ARM_CC) $(ARMT_FLAGS) -c $< -o $@
+
+$(ARMT_DIR)/pass1.ld: tools/armlink.py | $(ARMT_DIR)
+	python3 -I tools/armlink.py first-pass $@
+
+$(ARMT_DIR)/pass1.map: $(ARMT_DIR)/pass1.ld $(ARMT_OBJECTS)
+	$(ARM_CC) $(ARM_CFLAGS) $(ARM_LDFLAGS) -Wl,-T,$< -Wl,-Map,$@ $(ARMT_OBJECTS) \
+		-lc -lgcc -o $(ARMT_DIR)/pass1.elf
+
+$(ARMT_DIR)/pass2.ld: $(ARMT_DIR)/pass1.map tools/armlink.py
+	python3 -I tools/armlink.py layout $< $@
+
+$(ARMT_DIR)/pass2.elf: $(ARMT_DIR)/pass2.ld $(ARMT_OBJECTS)
+	$(ARM_CC) $(ARM_CFLAGS) $(ARM_LDFLAGS) -Wl,-T,$< -Wl,-Map,$(ARMT_DIR)/pass2.map \
+		$(ARMT_OBJECTS) -lc -lgcc -o $@
+	@! $(ARM_CC:gcc=objdump) -d $@ | grep -qE "\s(ldrd|strd)\s" || \
+		{ echo "ldrd/strd found: code in resources is only 4-byte aligned" >&2; exit 1; }
+
+$(ARMT_RCP): $(ARMT_DIR)/pass2.elf tools/armlink.py
+	rm -rf $(ARMT_DIR)/res
+	python3 -I tools/armlink.py package $< $(ARMT_DIR)/res 1100
+
 # Host tools and tests
 
 host: $(PVIEW)
@@ -391,7 +427,8 @@ test-playback: $(PLAYBACK_SIM)
 # Runs the packaged ARM module in a PXA270 emulator and checks it decodes
 # each downloaded test video exactly like the host build. The second run
 # sends the sound through the ring and the stream callback.
-test-arm: $(ARM_RCP) $(BENCH_HOST)
+test-arm: $(ARM_RCP) $(ARMT_RCP) $(BENCH_HOST)
+	@$(DEPS)/venv/bin/python host/tests/arm_thumbs.py $(ARMT_DIR)/res
 	@for file in testdata/media/*.mp4; do \
 		case "$$file" in *.video.mp4|*.audio.mp4) continue;; esac; \
 		for skip in 0 2; do \

@@ -8,9 +8,10 @@ and calls between files go through the GOT, which lives with the writable
 data in one heap block that the 68K loader fixes up.
 
   armlink.py layout MAP SCRIPT     segment the code using a first-pass map
-  armlink.py package ELF OUTDIR    check the final link and write resources
+  armlink.py package ELF OUTDIR [BASE]
+                                   check the final link and write resources
 
-Resources written by package (all integers big-endian):
+Resources written by package (all integers big-endian), for BASE 1000:
   armh 1000        header
   armc 1001+i      code segment i, with any branch veneers appended
   armd 2001+i      initial writable data (GOT and .data), in chunks
@@ -234,7 +235,7 @@ BRANCHES = {R_ARM_PC24, R_ARM_CALL, R_ARM_JUMP24}
 GOT_RELATIVE = {R_ARM_GOTOFF32, R_ARM_GOT_BREL}
 
 
-def package(elf_path, out_dir):
+def package(elf_path, out_dir, first_id=1000):
     elf = Elf(elf_path)
     segments = sorted((s for s in elf.sections if re.fullmatch(r"\.seg\d+", s["name"])),
                       key=lambda s: int(s["name"][4:]))
@@ -374,16 +375,16 @@ def package(elf_path, out_dir):
         if len(code) > RESOURCE_LIMIT:
             fail(f"segment {index} is {len(code)} bytes with veneers")
         codes[index] = code
-        resources.append(("armc", 1001 + index, bytes(code)))
+        resources.append(("armc", first_id + 1 + index, bytes(code)))
     data_chunks = [rw_image[i:i + CHUNK_LIMIT] for i in range(0, len(rw_image), CHUNK_LIMIT)]
     for index, chunk in enumerate(data_chunks):
-        resources.append(("armd", 2001 + index, bytes(chunk)))
+        resources.append(("armd", first_id + 1001 + index, bytes(chunk)))
     packed = b"".join(struct.pack(">II", rw_offset, (region << 24) | value)
                       for rw_offset, (region, value) in sorted(fixups.items()))
     per_chunk = CHUNK_LIMIT // 8 * 8
     fixup_chunks = [packed[i:i + per_chunk] for i in range(0, len(packed), per_chunk)]
     for index, chunk in enumerate(fixup_chunks):
-        resources.append(("armr", 3001 + index, chunk))
+        resources.append(("armr", first_id + 2001 + index, chunk))
 
     entry = elf.symbol("ArmEntry")
     if segment_of(entry) != 0:
@@ -394,7 +395,7 @@ def package(elf_path, out_dir):
                           got_offset, len(fixups), 0)
     for index, code in enumerate(codes):
         header += struct.pack(">II", regions[index][0], len(code))
-    resources.insert(0, ("armh", 1000, header))
+    resources.insert(0, ("armh", first_id, header))
 
     lines = []
     for kind, resource_id, data in resources:
@@ -416,8 +417,8 @@ def main(argv):
         layout(argv[1], argv[2])
     elif len(argv) == 2 and argv[0] == "first-pass":
         first_pass_script(argv[1])
-    elif len(argv) == 3 and argv[0] == "package":
-        package(argv[1], argv[2])
+    elif len(argv) in (3, 4) and argv[0] == "package":
+        package(argv[1], argv[2], *(int(a) for a in argv[3:]))
     else:
         sys.exit(__doc__)
 

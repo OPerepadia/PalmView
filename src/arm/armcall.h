@@ -74,6 +74,13 @@ enum {
 
 /* Stop the sound stream before armCmdClose: it frees the ring. */
 
+/* The thumbnail module: a separate, small module that needs no armCmdInit. */
+enum {
+    /* args: JPEG, length, pixels, 1 for the list size
+     * result: 1 when decoded; the pixels are big-endian, for the 68K side */
+    armThumbCmdDecode = 1
+};
+
 #define ARM_MODULE_VERSION 5
 
 #endif

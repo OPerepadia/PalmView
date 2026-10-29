@@ -43,6 +43,7 @@ ArmEntry:
 
     .size ArmEntry, . - ArmEntry
 
+#ifndef ARM_NO_SOUND
 /* Palm OS sound stream callback, called on the sound thread with
  * (SoundRing *ring, channel, buffer, frames). The OS does not know our
  * GOT, so it comes from the ring's first word; r9 is restored after.
@@ -65,3 +66,4 @@ SoundCallbackEntry:
     .word SoundCallback(GOT)
 
     .size SoundCallbackEntry, . - SoundCallbackEntry
+#endif

@@ -1154,6 +1154,8 @@ static Err StartApplication(AppState *s)
     if (s->searchP == 0 || s->playerP == 0 || s->searchTextH == 0)
         return memErrNotEnoughSpace;
     YtSearchInit(s->searchP, &s->codec);
+    s->thumbModuleLoaded = ArmModuleLoad(&s->thumbModule, ARM_THUMB_ID,
+        ARM_THUMB_STACK_SIZE) == errNone;
     s->resultFocus = NO_RESULT;
     s->resultRows = RESULT_ROWS_MIN;
     s->resultRowHeight = RESULT_ROW_HEIGHT_MIN;
@@ -1188,6 +1190,7 @@ static void StopApplication(AppState *s)
     }
     CloseFile(s);
     FreeThumbs(s);
+    if (s->thumbModuleLoaded) ArmModuleUnload(&s->thumbModule);
     {
         /* The search text handle belongs to the app; detach it so closing
          * the form does not free it. */

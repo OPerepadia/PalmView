@@ -464,7 +464,8 @@ static const Char *LoadDecoder(Playback *p, Boolean large)
     p->sampleP = (UInt8 *)ArmLargeAlloc(SAMPLE_CAPACITY);
     if (p->readerP == 0 || p->sampleP == 0) return "Out of memory.";
     MemSet(p->readerP, sizeof(Mp4Reader), 0);
-    if (ArmModuleLoad(&p->module) != errNone) return "Could not load the decoder.";
+    if (ArmModuleLoad(&p->module, ARM_DECODER_ID, ARM_STACK_SIZE) != errNone)
+        return "Could not load the decoder.";
     p->moduleLoaded = true;
     errorP = AllocateArena(p, large);
     if (errorP != 0) return errorP;

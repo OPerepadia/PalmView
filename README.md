@@ -320,6 +320,10 @@ How the module is built and loaded:
   would need patching.
 - `src/palm/arm_module.c` locks the code resources, copies the GOT and
   data into one heap block, and applies the fixups.
+- A second, small module decodes the thumbnails with TJpgDec. It is
+  linked the same way, packaged from resource 1100, and stays loaded while
+  the app runs. A thumbnail takes about 2 million ARM instructions, where
+  the 68K build took about 370 ms on a TX.
 - `tools/patch-ffmpeg.py` limits FFmpeg to 8-bit H.264 and small integer
   transforms. That halves the code to 1.2 MB and cuts BSS from 1.9 MB to
   178 KB.
@@ -384,7 +388,7 @@ tools/fetch-deps.sh        # SDK 5r4, PalmTLS and TJpgDec, pinned
 tools/build-arm-deps.sh    # FFmpeg and musl for the ARM module, pinned
 make                       # build/debug/PalmView.prc
 make test                  # host tests
-make test-arm              # ARM module in an emulator vs. the host
+make test-arm              # ARM modules in an emulator vs. the host
 make test-playback         # player timing against a simulated clock
 make dist                  # PalmView, PalmTLSArm and PalmViewBench PRCs
 ```
@@ -419,7 +423,8 @@ against ffmpeg's.
   `json_scan` (streaming JSON), `yt_api` (YouTube requests and responses),
   `mp4_merge`, `mp4_read` (saved files), `mp4_stream` (DASH streams as they
   arrive), `mp4_frag` (fragment parsing for both), `text` (encodings, file
-  names), `thumb` (thumbnails, decoded with TJpgDec).
+  names), `thumb` (duration badges), `thumb_decode` (thumbnails, with
+  TJpgDec; built for the host and the ARM thumbnail module).
 - `src/palm/`: the app. `main.c` (UI and flow), `net_job.c` (cooperative
   HTTPS, based on PalmTLS's TLS Tester), `stream_feed.c` (streaming
   downloads), `store.c` (memory card), `arm_module.c` (native code loader),
@@ -428,7 +433,7 @@ against ffmpeg's.
   `rgb.c` (frames to RGB565, scaled and turned), `sound.c` (the PCM ring
   and stream callback), `dispatch.c` and `entry.S`
   (the 68K-to-ARM call), `libc.c` (heap and the C library bits FFmpeg
-  needs).
+  needs). `thumbmod.c` is the thumbnail module's command.
 - `src/bench/`: PalmView Bench.
 - `host/`: the `pview` tool, a Palm OS shim and tests.
 - `certs/google.pem`: the Google Trust Services WR2 and WE2 issuers the app
@@ -451,8 +456,8 @@ builds. Globals are not available: keep state on the heap.
 ## License
 
 GPL-3.0-or-later, because PalmTLS and its HTTP component are GPLv3.
-The app also contains TJpgDec by ChaN (its own permissive license).
-The ARM module also contains FFmpeg (LGPL-2.1-or-later, built without GPL
+The ARM thumbnail module contains TJpgDec by ChaN (its own permissive
+license). The ARM decoder module also contains FFmpeg (LGPL-2.1-or-later, built without GPL
 parts), musl's libm (MIT) and parts of newlib.
 Downloading from YouTube may break its terms of service; this is for
 personal use.

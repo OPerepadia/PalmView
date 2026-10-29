@@ -12,19 +12,24 @@
 /* Decodes a thumbnail into a bitmap drawn at double density; the list's
  * has the video's duration on it. *bitsPP gets the bitmap that holds its
  * pixels. Returns 0 if it cannot. */
-static BitmapType *DecodeThumb(const Thumb *thumbP, Boolean list,
+static BitmapType *DecodeThumb(AppState *s, const Thumb *thumbP, Boolean list,
                                const Char *durationP, BitmapType **bitsPP)
 {
     Coord width = list ? THUMB_LIST_WIDTH : THUMB_WIDTH;
     Coord height = list ? THUMB_LIST_HEIGHT : THUMB_HEIGHT;
-    void *workP = MemPtrNew(THUMB_WORK_SIZE);
     BitmapType *bitsP = 0, *bitmapP = 0;
     Coord bitsWidth, bitsHeight;
     UInt16 rowBytes, error;
-    if (workP != 0 && (bitsP = BmpCreate(width, height, 16, 0, &error)) != 0) {
+    if (s->thumbModuleLoaded &&
+            (bitsP = BmpCreate(width, height, 16, 0, &error)) != 0) {
+        UInt32 args[4];
+        args[0] = (UInt32)thumbP->jpegP;
+        args[1] = thumbP->length;
+        args[2] = (UInt32)BmpGetBits(bitsP);
+        args[3] = list;
         BmpGetDimensions(bitsP, &bitsWidth, &bitsHeight, &rowBytes);
-        if (rowBytes == (UInt16)(width * 2) && ThumbDecode(thumbP->jpegP, thumbP->length,
-                (UInt16 *)BmpGetBits(bitsP), workP, list)) {
+        if (rowBytes == (UInt16)(width * 2) &&
+                ArmModuleCall(&s->thumbModule, armThumbCmdDecode, args, 4) == 1) {
             if (list) ThumbBadge((UInt16 *)BmpGetBits(bitsP), durationP);
             bitmapP = (BitmapType *)BmpCreateBitmapV3(bitsP, kDensityDouble,
                 BmpGetBits(bitsP), 0);
@@ -34,7 +39,6 @@ static BitmapType *DecodeThumb(const Thumb *thumbP, Boolean list,
             bitsP = 0;
         }
     }
-    if (workP != 0) MemPtrFree(workP);
     *bitsPP = bitsP;
     return bitmapP;
 }
@@ -121,7 +125,7 @@ static void DrawThumb(const AppState *s)
 void ShowDetailThumb(AppState *s)
 {
     if (s->detailThumbP == 0 && s->thumbs[s->selected].state == thumbLoaded)
-        s->detailThumbP = DecodeThumb(&s->thumbs[s->selected], false,
+        s->detailThumbP = DecodeThumb(s, &s->thumbs[s->selected], false,
             0, &s->detailBitsP);
     DrawThumb(s);
 }
@@ -188,7 +192,7 @@ static void StoreThumb(AppState *s, UInt16 item)
     if (thumbP->jpegP != 0) {
         MemMove(thumbP->jpegP, s->thumbBufferP, s->thumbLength);
         thumbP->length = s->thumbLength;
-        thumbP->bitmapP = DecodeThumb(thumbP, true,
+        thumbP->bitmapP = DecodeThumb(s, thumbP, true,
             s->searchP->items[item].length, &thumbP->bitsP);
     }
     if (thumbP->bitmapP == 0) {

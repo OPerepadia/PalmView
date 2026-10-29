@@ -205,7 +205,7 @@ static Boolean EnsureModule(Bench *b)
     Int32 result;
     if (b->loaded) return true;
     start = TimGetTicks();
-    error = ArmModuleLoad(&b->module);
+    error = ArmModuleLoad(&b->module, ARM_DECODER_ID, ARM_STACK_SIZE);
     if (error != errNone) {
         Log(b, "Module load failed, error ");
         LogHex(b, error);

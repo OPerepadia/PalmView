@@ -131,7 +131,8 @@ def signed(value):
 
 
 class Module:
-    def __init__(self, res_dir, arena_size, count, profile_map=None, extra_size=0):
+    def __init__(self, res_dir, arena_size, count, profile_map=None, extra_size=0,
+                 base=1000):
         # RES_DIR is armlink.py's output directory or a finished PRC.
         if res_dir.endswith(".prc"):
             with open(res_dir, "rb") as handle:
@@ -149,7 +150,7 @@ class Module:
                 with open(f"{res_dir}/{name}", "rb") as handle:
                     return handle.read()
 
-        header = read("armh1000.bin")
+        header = read(f"armh{base}.bin")
         magic, _version, nseg, ndata, nfix, _ = struct.unpack_from(">IIHHHH", header, 0)
         if magic != 0x5054414D:
             sys.exit("bad module header")
@@ -169,17 +170,17 @@ class Module:
         self.segments = []
         sizes = []
         for i in range(nseg):
-            code = read(f"armc{1001 + i}.bin")
+            code = read(f"armc{base + 1 + i}.bin")
             # Reverse order, misaligned by 4, 8 or 12 mod 16.
             address = CODE_BASE + (nseg - 1 - i) * 0x10000 + 4 + 4 * (i % 3)
             self.uc.mem_write(address, code)
             self.segments.append(address)
             sizes.append(len(code))
-        image = b"".join(read(f"armd{2001 + i}.bin") for i in range(ndata))
+        image = b"".join(read(f"armd{base + 1001 + i}.bin") for i in range(ndata))
         if len(image) != image_size:
             sys.exit("data image size mismatch")
         self.uc.mem_write(RW_BASE, image + bytes(rw_total - image_size))
-        fixups = b"".join(read(f"armr{3001 + i}.bin") for i in range(nfix))
+        fixups = b"".join(read(f"armr{base + 2001 + i}.bin") for i in range(nfix))
         if len(fixups) != fixup_count * 8:
             sys.exit("fixup count mismatch")
         for i in range(fixup_count):
@@ -203,7 +204,7 @@ class Module:
             self.blocks[address] += size // 4
 
     def call(self, command, *args):
-        words = [MAGIC, self.got, STACK_BASE + STACK_SIZE, CMD[command], 0]
+        words = [MAGIC, self.got, STACK_BASE + STACK_SIZE, CMD.get(command, command), 0]
         words += list(args) + [0] * (8 - len(args)) + [0] * 8
         self.uc.mem_write(CALL_ADDR, struct.pack(">21I", *[w & 0xFFFFFFFF for w in words]))
         self.uc.reg_write(UC_ARM_REG_R0, 0)

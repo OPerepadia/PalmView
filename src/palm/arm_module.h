@@ -19,6 +19,12 @@
 #define armErrBadFixups (appErrorClass | 4)
 #define ARM_STACK_SIZE 65536UL
 
+/* Each module's resources start at its header's ID: code from ID + 1,
+ * data from ID + 1001, fixups from ID + 2001. */
+#define ARM_DECODER_ID 1000
+#define ARM_THUMB_ID 1100
+#define ARM_THUMB_STACK_SIZE 16384UL
+
 typedef struct ArmModule {
     MemHandle headerH;
     MemHandle segmentH[ARM_MODULE_MAX_SEGMENTS];
@@ -30,6 +36,7 @@ typedef struct ArmModule {
     UInt32 rwSize;
     UInt32 fixupCount;
     UInt8 *stackP;
+    UInt32 stackSize;
     ArmCall *callP;
     void *entryP;
     UInt32 codeBytes;
@@ -39,7 +46,7 @@ typedef struct ArmModule {
  * MemPtrNew. */
 void *ArmLargeAlloc(UInt32 size);
 
-Err ArmModuleLoad(ArmModule *moduleP);
+Err ArmModuleLoad(ArmModule *moduleP, DmResID firstId, UInt32 stackSize);
 void ArmModuleUnload(ArmModule *moduleP);
 /* Runs one command; arguments are copied in, outputs are left in
  * moduleP->callP->out. Returns the command's signed result. */

@@ -9,5 +9,7 @@
 #define JD_USE_SCALE 1
 /* Table-based clipping: faster, 1 KB more code */
 #define JD_TBLCLIP 1
-/* Basic optimization only: the 68K build has 16-bit int. */
+/* Basic optimization only, for 16-bit int. The ARM module sets 1. */
+#ifndef JD_FASTDECODE
 #define JD_FASTDECODE 0
+#endif

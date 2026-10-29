@@ -101,6 +101,8 @@ typedef struct AppState {
     UInt16 thumbItem;           /* the one downloading, or NO_RESULT */
     BitmapType *detailBitsP;    /* the selected video's, full size */
     BitmapType *detailThumbP;
+    ArmModule thumbModule;      /* decodes the thumbnails */
+    Boolean thumbModuleLoaded;
 
     UInt16 volume;
     UInt16 stream;
