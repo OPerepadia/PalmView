@@ -138,11 +138,25 @@ void BuildInfo(AppState *s)
 }
 
 /* The quality picker, once YouTube offers both, until a download starts */
-static void ShowDetailQuality(const AppState *s, Boolean idle)
+Boolean HasDetailPicker(const AppState *s)
 {
     const YtPlayer *playerP = s->playerP;
-    Boolean picker = idle && YtPlayerPlayable(playerP) &&
+    return (s->task == taskIdle || s->task == taskThumbs) &&
+        YtPlayerPlayable(playerP) &&
         playerP->video[quality144].found && playerP->video[quality240].found;
+}
+
+Boolean InfoAtTop(void)
+{
+    UInt16 position, textHeight, fieldHeight;
+    FldGetScrollValues((FieldType *)GetObject(InfoField), &position,
+        &textHeight, &fieldHeight);
+    return position == 0;
+}
+
+static void ShowDetailQuality(const AppState *s)
+{
+    Boolean picker = HasDetailPicker(s);
     if (picker) {
         CtlSetLabel((ControlType *)GetObject(DetailQualityTrigger),
             kQualityNames[VideoChoice(s)]);
@@ -152,9 +166,19 @@ static void ShowDetailQuality(const AppState *s, Boolean idle)
     ShowObject(DetailQualityTrigger, picker);
 }
 
+static Boolean IsIdle(const AppState *s)
+{
+    return s->task == taskIdle || s->task == taskThumbs;
+}
+
+Boolean CanPlayDetail(const AppState *s)
+{
+    return IsIdle(s) && (s->saved || YtPlayerPlayable(s->playerP));
+}
+
 void RefreshDetail(AppState *s)
 {
-    Boolean idle = s->task == taskIdle || s->task == taskThumbs;
+    Boolean idle = IsIdle(s);
     if (!OnForm(DetailForm)) return;
     SetFieldText(HeadField, s->head);
     SetFieldText(InfoField, s->info);
@@ -163,8 +187,8 @@ void RefreshDetail(AppState *s)
     ShowObject(DownloadButton, idle && YtPlayerPlayable(s->playerP) &&
         !(s->saved && s->quality == s->savedQuality));
     ShowObject(CancelButton, s->task == taskDownload);
-    ShowObject(PlayButton, idle && (s->saved || YtPlayerPlayable(s->playerP)));
-    ShowDetailQuality(s, idle);
+    ShowObject(PlayButton, CanPlayDetail(s));
+    ShowDetailQuality(s);
     DrawProgressBar(s);
     ShowDetailThumb(s);
 }

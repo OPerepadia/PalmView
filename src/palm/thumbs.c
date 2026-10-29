@@ -208,6 +208,46 @@ static void StoreThumb(AppState *s, UInt16 item)
     if (OnForm(DetailForm) && item == s->selected) ShowDetailThumb(s);
 }
 
+void SaveThumbBeside(AppState *s, UInt16 item, const Char *videoPathP)
+{
+    const Thumb *thumbP = &s->thumbs[item];
+    Char path[STORE_PATH_CAPACITY];
+    FileRef file;
+    if (thumbP->state != thumbLoaded || thumbP->jpegP == 0) return;
+    StoreThumbPath(path, videoPathP);
+    if (StoreCreate(s->volume, path, &file) != errNone) return;
+    if (StoreWrite(file, thumbP->jpegP, thumbP->length) != errNone) {
+        VFSFileClose(file);
+        VFSFileDelete(s->volume, path);
+        return;
+    }
+    VFSFileClose(file);
+}
+
+BitmapType *LoadSavedThumb(AppState *s, const Char *videoPathP,
+                           const Char *durationP, BitmapType **bitsPP)
+{
+    Char path[STORE_PATH_CAPACITY];
+    Thumb thumb;
+    UInt16 volume, length;
+    BitmapType *bitmapP = 0;
+    UInt8 *bufferP;
+    *bitsPP = 0;
+    if (StoreOpenVolume(&volume) != errNone) return 0;
+    bufferP = (UInt8 *)MemPtrNew(THUMB_JPEG_CAPACITY + 1);
+    if (bufferP == 0) return 0;
+    StoreThumbPath(path, videoPathP);
+    if (StoreReadText(volume, path, (Char *)bufferP, THUMB_JPEG_CAPACITY + 1,
+            &length) == errNone && length != 0) {
+        MemSet(&thumb, sizeof(thumb), 0);
+        thumb.jpegP = bufferP;
+        thumb.length = length;
+        bitmapP = DecodeThumb(s, &thumb, true, durationP, bitsPP);
+    }
+    MemPtrFree(bufferP);
+    return bitmapP;
+}
+
 /* A thumbnail arrived and the connection stays open: ask for the next. */
 void ThumbArrived(AppState *s)
 {

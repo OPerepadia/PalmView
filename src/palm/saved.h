@@ -19,10 +19,13 @@ Boolean ReadSavedVideo(const Char *pathP, SavedVideo *videoP);
 UInt16 SavedQuality(const SavedVideo *videoP);
 
 void OpenSavedForm(AppState *s);
-void SelectSaved(AppState *s);
+void ScrollSaved(AppState *s, Int16 rows);
+void FocusSavedList(AppState *s);
 void PlaySaved(AppState *s);
+Boolean HandleSavedKey(AppState *s, const EventType *eventP);
 void DeleteSaved(AppState *s);
-void LayoutSavedForm(void);
+void LayoutSavedForm(AppState *s);
 void ReturnFromSaved(AppState *s);
+void FreeSaved(AppState *s);
 
 #endif

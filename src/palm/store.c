@@ -30,6 +30,15 @@ void StoreMakePath(Char *pathP, const Char *nameP)
     StrNCat(pathP, nameP, STORE_PATH_CAPACITY);
 }
 
+void StoreThumbPath(Char *pathP, const Char *videoPathP)
+{
+    UInt16 length;
+    StrNCopy(pathP, videoPathP, STORE_PATH_CAPACITY - 1);
+    pathP[STORE_PATH_CAPACITY - 1] = '\0';
+    length = StrLen(pathP);
+    if (length >= 4) StrCopy(pathP + length - 4, ".jpg");
+}
+
 static Boolean IsVideoName(const Char *nameP)
 {
     UInt16 length = StrLen(nameP);

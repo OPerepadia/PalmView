@@ -15,6 +15,11 @@ UInt32 ThumbBytes(const AppState *s);
 void FreeThumbs(AppState *s);
 void ShowDetailThumb(AppState *s);
 void StartThumbs(AppState *s);
+/* Saves a result's thumbnail beside its video; nothing if not loaded. */
+void SaveThumbBeside(AppState *s, UInt16 item, const Char *videoPathP);
+/* That thumbnail decoded for the list, or 0. *bitsPP holds its pixels. */
+BitmapType *LoadSavedThumb(AppState *s, const Char *videoPathP,
+                           const Char *durationP, BitmapType **bitsPP);
 void ThumbArrived(AppState *s);
 void ThumbsEnded(AppState *s);
 

@@ -21,9 +21,13 @@
 #define HISTORY_CAPACITY 64
 /* palmOne's 5-way reports its buttons this way too (PalmChars.h). */
 #define vchrNavChange 0x0503
+#define navBitUp 0x0001
+#define navBitDown 0x0002
 #define navBitLeft 0x0004
 #define navBitRight 0x0008
 #define navBitSelect 0x0010
+#define navChangeUp 0x0100
+#define navChangeDown 0x0200
 #define navChangeLeft 0x0400
 #define navChangeRight 0x0800
 #define navChangeSelect 0x1000
@@ -31,6 +35,11 @@
 #define VOLUME_LEVELS 11
 #define VOLUME_DEFAULT 6
 #define NO_RESULT 0xFFFF
+/* The icon's red */
+#define ACCENT_COLOR { 0, 0xC4, 0x30, 0x2B }
+
+/* The screens in the title bar's dropdown, in its order */
+enum { screenHome = 0, screenDownloads };
 
 /* Video qualities, in the order of their itags */
 enum { quality144 = 0, quality240 };
@@ -56,6 +65,17 @@ typedef struct Thumb {
 } Thumb;
 
 enum { thumbMissing = 0, thumbLoaded, thumbFailed };
+
+/* A Downloads row, read when it comes into view */
+typedef struct SavedEntry {
+    Boolean read;
+    UInt8 thumbState;           /* thumbMissing until tried */
+    UInt16 quality;
+    UInt32 size;
+    UInt32 ms;                  /* 0 when unknown */
+    BitmapType *bitsP;
+    BitmapType *bitmapP;
+} SavedEntry;
 
 typedef struct AppPrefs {
     Char visitor[YT_VISITOR_CAPACITY];
@@ -130,9 +150,13 @@ typedef struct AppState {
     UInt32 savedSize;
 
     Char *savedNamesP;          /* MAX_SAVED names, while SavedForm is up */
+    SavedEntry *savedEntriesP;  /* one per name */
     UInt16 savedCount;
+    UInt16 savedTop;            /* video in the first row */
+    UInt16 savedRows;
+    Coord savedRowHeight;
+    UInt16 savedFocus;          /* selected video, or NO_RESULT */
     Char savedStatus[48];
-    Char savedInfo[32];
 
     Playback *playbackP;        /* while PlayForm is up */
     StreamFeed *feedP;          /* while streaming */
@@ -142,6 +166,7 @@ typedef struct AppState {
     Boolean prefsChanged;       /* saved when the app stops */
     UInt32 lastCentre;          /* ticks of the last 5-way centre press */
     UInt32 lastSkip;            /* and of the last left or right one */
+    UInt32 titleTicks;          /* of the last move to or from the title picker */
     UInt32 lastInputTicks;      /* of the last pen, key or scroll event */
     Boolean seekDragging;       /* the pen is on the seek bar */
     Boolean volumeDragging;     /* or on the volume bars */
@@ -166,6 +191,7 @@ void AppendHex(Char *dstP, UInt16 capacity, UInt16 value);
 void AppendSize(Char *dstP, UInt16 capacity, UInt32 bytes);
 void AppendSeconds(Char *dstP, UInt16 capacity, UInt32 ticks);
 void AppendClock(Char *dstP, UInt16 capacity, UInt32 ms);
+void AppendDetail(Char *lineP, UInt16 capacity, const Char *textP);
 void SetFieldText(UInt16 fieldId, Char *textP);
 void SetProgressText(AppState *s, const Char *textP);
 void ShowObject(UInt16 id, Boolean visible);
@@ -178,10 +204,16 @@ void DescribeResult(const NetJobResult *r, Boolean toCard, Char *dstP,
 void DescribeFailure(const AppState *s, Char *dstP, UInt16 capacity);
 Boolean StartApiJob(AppState *s, UInt16 task, UInt16 requestLength);
 void DrawResultRow(const AppState *s, UInt16 row);
+void DrawListRow(const RectangleType *rowP, const Char *titleP,
+                 const Char *detailsP, const Char *durationP,
+                 BitmapType *bitmapP, Boolean focused);
+void FitResultRows(Coord listHeight, UInt16 *rowsP, Coord *rowHeightP);
 void ShowResults(AppState *s, Boolean draw);
 Boolean HasInputArea(void);
 void SetObjectY(FormType *formP, UInt16 index, Coord y, Coord height);
 void LayoutMainForm(AppState *s);
 Boolean NavPressed(const EventType *eventP, UInt16 bit, UInt16 change);
+Boolean FocusTitlePicker(AppState *s, UInt16 triggerId);
+void ReleaseTitlePicker(AppState *s);
 
 #endif

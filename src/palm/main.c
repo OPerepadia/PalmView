@@ -153,9 +153,12 @@ void DrawProgressBar(const AppState *s)
     WinEraseRectangle(&frame, 0);
     if (s->percent == 0 && s->task != taskDownload) return;
     WinDrawRectangleFrame(rectangleFrame, &bounds);
+    WinPushDrawState();
+    WinSetForeColor(UIColorGetTableEntryIndex(UIFormFrame));
     fill = bounds;
     fill.extent.x = (Coord)((UInt32)bounds.extent.x * s->percent / 100UL);
     WinDrawRectangle(&fill, 0);
+    WinPopDrawState();
 }
 
 /* Libraries */
@@ -420,7 +423,8 @@ static void GetResultBounds(RectangleType *boundsP)
     FrmGetObjectBounds(formP, FrmGetObjectIndex(formP, ResultGadget), boundsP);
 }
 
-static void AppendDetail(Char *lineP, UInt16 capacity, const Char *textP)
+/* Joins details with " · " */
+void AppendDetail(Char *lineP, UInt16 capacity, const Char *textP)
 {
     if (textP[0] == '\0') return;
     if (lineP[0] != '\0') Append(lineP, capacity, " \xB7 ");
@@ -459,38 +463,34 @@ static Boolean DrawPlaceholder(const RectangleType *thumbP, const Char *duration
     return drawn;
 }
 
-/* A result: its thumbnail, or a gray box until it arrives, the title on
- * one or two lines, cut with "..." after two, and "1.8B · 10y ago ·
- * Channel". Drawn in native pixels for a hairline under each result. */
-void DrawResultRow(const AppState *s, UInt16 row)
+/* A list row: the thumbnail or a gray box with the duration, the title on
+ * up to two lines, and the details. No title leaves it empty. Drawn in
+ * native pixels for a hairline under each row. */
+void DrawListRow(const RectangleType *rowP, const Char *titleP,
+                 const Char *detailsP, const Char *durationP,
+                 BitmapType *bitmapP, Boolean focused)
 {
     static const RGBColorType kText = { 0, 0x00, 0x00, 0x00 };
     static const RGBColorType kDetails = { 0, 0x80, 0x80, 0x80 };
     static const RGBColorType kLine = { 0, 0xC8, 0xC8, 0xC8 };
-    static const RGBColorType kFocus = { 0, 0xC8, 0xDC, 0xF8 };
+    static const RGBColorType kFocus = { 0, 0xD6, 0xD6, 0xD6 };
+    static const RGBColorType kFocusDetails = { 0, 0x60, 0x60, 0x60 };
     static const RGBColorType kPlaceholder = { 0, 0xE0, 0xE0, 0xE0 };
-    UInt16 item = s->resultTop + row;
-    const YtSearchItem *itemP = &s->searchP->items[item];
-    const Thumb *thumbP = &s->thumbs[item];
-    RectangleType bounds, thumb;
+    RectangleType bounds = *rowP, thumb;
     UInt16 coordinates, first, lines;
     Coord margin, lineHeight, left, width, y, bottom;
-    Char line[80];
-    GetResultBounds(&bounds);
-    bounds.topLeft.y += row * s->resultRowHeight;
-    bounds.extent.y = s->resultRowHeight;
     WinPushDrawState();
     coordinates = WinSetCoordinateSystem(kCoordinatesNative);
     WinScaleRectangle(&bounds);
     WinSetBackColor(UIColorGetTableEntryIndex(UIFormFill));
     WinEraseRectangle(&bounds, 0);
-    if (item < s->searchP->count) {
+    if (titleP != 0) {
         bottom = bounds.topLeft.y + bounds.extent.y - 1;
         WinSetForeColorRGB(&kLine, 0);
         WinDrawLine(bounds.topLeft.x, bottom,
             bounds.topLeft.x + bounds.extent.x - 1, bottom);
         bounds.extent.y--;
-        if (item == s->resultFocus) {
+        if (focused) {
             WinSetBackColorRGB(&kFocus, 0);
             WinEraseRectangle(&bounds, 0);
         }
@@ -500,34 +500,53 @@ void DrawResultRow(const AppState *s, UInt16 row)
         RctSetRectangle(&thumb, bounds.topLeft.x + margin, bounds.topLeft.y +
             (bounds.extent.y - THUMB_LIST_HEIGHT) / 2, THUMB_LIST_WIDTH,
             THUMB_LIST_HEIGHT);
-        if (thumbP->bitmapP != 0) {
-            WinDrawBitmap(thumbP->bitmapP, thumb.topLeft.x, thumb.topLeft.y);
-        } else if (!DrawPlaceholder(&thumb, itemP->length)) {
+        if (bitmapP != 0) {
+            WinDrawBitmap(bitmapP, thumb.topLeft.x, thumb.topLeft.y);
+        } else if (!DrawPlaceholder(&thumb, durationP)) {
             WinSetForeColorRGB(&kPlaceholder, 0);
             WinDrawRectangle(&thumb, 0);
         }
         left = thumb.topLeft.x + thumb.extent.x + 2 * margin;
         width = bounds.topLeft.x + bounds.extent.x - margin - left;
-        first = FntWordWrap(itemP->title, (UInt16)width);
-        lines = itemP->title[first] != '\0' ? 3 : 2;
+        first = FntWordWrap(titleP, (UInt16)width);
+        lines = titleP[first] != '\0' ? 3 : 2;
         y = bounds.topLeft.y + (bounds.extent.y - lines * lineHeight) / 2;
         WinSetTextColorRGB(&kText, 0);
-        WinDrawTruncChars(itemP->title, (Int16)first, left, y, width);
+        WinDrawTruncChars(titleP, (Int16)first, left, y, width);
         if (lines == 3) {
             y += lineHeight;
-            WinDrawTruncChars(itemP->title + first,
-                (Int16)StrLen(itemP->title + first), left, y, width);
+            WinDrawTruncChars(titleP + first, (Int16)StrLen(titleP + first),
+                left, y, width);
         }
-        line[0] = '\0';
-        if (itemP->live) AppendDetail(line, sizeof(line), "Live");
-        AppendShort(line, sizeof(line), itemP->views);
-        AppendShort(line, sizeof(line), itemP->published);
-        AppendDetail(line, sizeof(line), itemP->channel);
-        WinSetTextColorRGB(&kDetails, 0);
-        WinDrawTruncChars(line, StrLen(line), left, y + lineHeight, width);
+        WinSetTextColorRGB(focused ? &kFocusDetails : &kDetails, 0);
+        WinDrawTruncChars(detailsP, StrLen(detailsP), left, y + lineHeight,
+            width);
     }
     WinSetCoordinateSystem(coordinates);
     WinPopDrawState();
+}
+
+/* A result, with "1.8B · 10y ago · Channel" for details */
+void DrawResultRow(const AppState *s, UInt16 row)
+{
+    UInt16 item = s->resultTop + row;
+    const YtSearchItem *itemP = &s->searchP->items[item];
+    RectangleType bounds;
+    Char line[80];
+    GetResultBounds(&bounds);
+    bounds.topLeft.y += row * s->resultRowHeight;
+    bounds.extent.y = s->resultRowHeight;
+    if (item >= s->searchP->count) {
+        DrawListRow(&bounds, 0, 0, 0, 0, false);
+        return;
+    }
+    line[0] = '\0';
+    if (itemP->live) AppendDetail(line, sizeof(line), "Live");
+    AppendShort(line, sizeof(line), itemP->views);
+    AppendShort(line, sizeof(line), itemP->published);
+    AppendDetail(line, sizeof(line), itemP->channel);
+    DrawListRow(&bounds, itemP->title, line, itemP->length,
+        s->thumbs[item].bitmapP, item == s->resultFocus);
 }
 
 static void DrawResults(const AppState *s)
@@ -689,6 +708,16 @@ void SetObjectY(FormType *formP, UInt16 index, Coord y, Coord height)
     FrmSetObjectBounds(formP, index, &bounds);
 }
 
+/* Whole rows that grow to fill listHeight */
+void FitResultRows(Coord listHeight, UInt16 *rowsP, Coord *rowHeightP)
+{
+    UInt16 rows = (UInt16)(listHeight / RESULT_ROW_HEIGHT_MIN);
+    if (rows < RESULT_ROWS_MIN) rows = RESULT_ROWS_MIN;
+    if (rows > RESULT_ROWS_MAX) rows = RESULT_ROWS_MAX;
+    *rowsP = rows;
+    *rowHeightP = listHeight / (Coord)rows;
+}
+
 /* Fits the form to the screen: the list takes the space above the status
  * line, in whole rows that grow to fill it. The input area opening or
  * closing changes the screen's height. */
@@ -697,18 +726,14 @@ void LayoutMainForm(AppState *s)
     FormType *formP = FrmGetActiveForm();
     RectangleType bounds;
     Coord width, height, listHeight;
-    UInt16 i, rows;
+    UInt16 i;
     if (!HasInputArea()) return;
     WinGetDisplayExtent(&width, &height);
     RctSetRectangle(&bounds, 0, 0, width, height);
     WinSetBounds(FrmGetWindowHandle(formP), &bounds);
-    listHeight = height - RESULT_TOP - RESULT_BOTTOM;
-    rows = (UInt16)(listHeight / RESULT_ROW_HEIGHT_MIN);
-    if (rows < RESULT_ROWS_MIN) rows = RESULT_ROWS_MIN;
-    if (rows > RESULT_ROWS_MAX) rows = RESULT_ROWS_MAX;
-    s->resultRows = rows;
-    s->resultRowHeight = listHeight / (Coord)rows;
-    listHeight = s->resultRowHeight * (Coord)rows;
+    FitResultRows(height - RESULT_TOP - RESULT_BOTTOM, &s->resultRows,
+        &s->resultRowHeight);
+    listHeight = s->resultRowHeight * (Coord)s->resultRows;
     SetObjectY(formP, FrmGetObjectIndex(formP, ResultGadget), RESULT_TOP, listHeight);
     SetObjectY(formP, FrmGetObjectIndex(formP, ResultScrollBar), RESULT_TOP, listHeight);
     SetObjectY(formP, FrmGetObjectIndex(formP, StatusField),
@@ -732,6 +757,7 @@ static void InitMainForm(AppState *s)
         FrmSetGadgetData(formP, index, s);
         FrmSetGadgetHandler(formP, index, ResultGadgetHandler);
     }
+    LstSetSelection((ListType *)GetObject(MainScreenList), screenHome);
     ShowResults(s, false);
     FldSetTextPtr((FieldType *)GetObject(StatusField), s->status);
     FrmSetFocus(FrmGetActiveForm(), FrmGetObjectIndex(FrmGetActiveForm(),
@@ -884,6 +910,83 @@ Boolean NavPressed(const EventType *eventP, UInt16 bit, UInt16 change)
         (eventP->data.keyDown.keyCode & (bit | change)) == (bit | change);
 }
 
+/* 5-way focus on the title bar's picker. The forms stay in application
+ * focus mode, where the 5-way is plain keys. Up past the first row puts the
+ * form in object focus mode with the ring on the picker; down puts it back. */
+
+static Boolean HasFiveWayNav(void)
+{
+    UInt32 version;
+    return FtrGet(sysFtrCreator, sysFtrNumFiveWayNavVersion, &version) == errNone;
+}
+
+static Boolean TitlePickerFocused(void)
+{
+    FrmNavStateFlagsType flags;
+    return HasFiveWayNav() &&
+        FrmGetNavState(FrmGetActiveForm(), &flags) == errNone &&
+        (flags & kFrmNavStateFlagsObjectFocusMode) != 0;
+}
+
+static void UseApplicationFocus(void)
+{
+    if (HasFiveWayNav()) FrmSetNavState(FrmGetActiveForm(), 0);
+}
+
+Boolean FocusTitlePicker(AppState *s, UInt16 triggerId)
+{
+    FormType *formP = FrmGetActiveForm();
+    if (!HasFiveWayNav() ||
+            FrmSetNavState(formP, kFrmNavStateFlagsObjectFocusMode) != errNone)
+        return false;
+    FrmNavObjectTakeFocus(formP, triggerId);
+    s->titleTicks = TimGetTicks();
+    return true;
+}
+
+void ReleaseTitlePicker(AppState *s)
+{
+    FormType *formP = FrmGetActiveForm();
+    if (!TitlePickerFocused()) return;
+    FrmNavRemoveFocusRing(formP);
+    FrmSetNavState(formP, 0);
+    if (OnForm(MainForm))
+        FrmSetFocus(formP, FrmGetObjectIndex(formP, SearchField));
+    s->titleTicks = TimGetTicks();
+}
+
+static Boolean IsTitleForm(void)
+{
+    return OnForm(MainForm) || OnForm(SavedForm) || OnForm(DetailForm);
+}
+
+/* A 5-way direction, as a character or as a nav change */
+static Boolean IsDirectionKey(const EventType *eventP)
+{
+    WChar c = eventP->data.keyDown.chr;
+    return c == vchrPageUp || c == vchrRockerUp || c == vchrPageDown ||
+        c == vchrRockerDown || c == vchrRockerLeft || c == vchrRockerRight ||
+        (c == vchrNavChange && (eventP->data.keyDown.keyCode &
+            (navBitUp | navBitDown | navBitLeft | navBitRight |
+             navChangeUp | navChangeDown | navChangeLeft | navChangeRight)) != 0);
+}
+
+/* While the picker has the ring: down goes back to the list, the other
+ * directions are ignored, and centre is left to the system, which opens the
+ * picker. Returns false for that. */
+static Boolean HandleTitleKey(AppState *s, const EventType *eventP)
+{
+    WChar c = eventP->data.keyDown.chr;
+    if (c == vchrPageDown || c == vchrRockerDown ||
+            NavPressed(eventP, navBitDown, navChangeDown)) {
+        ReleaseTitlePicker(s);
+        if (OnForm(MainForm)) MoveResultFocus(s, 1);
+        else if (OnForm(SavedForm)) FocusSavedList(s);
+        return true;
+    }
+    return IsDirectionKey(eventP);
+}
+
 static Boolean HandleEvent(EventType *eventP, AppState *s)
 {
     FormType *formP;
@@ -899,7 +1002,7 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
             FrmDrawForm(FrmGetActiveForm());
             RefreshDetail(s);
         } else if (OnForm(SavedForm)) {
-            LayoutSavedForm();
+            LayoutSavedForm(s);
             FrmDrawForm(FrmGetActiveForm());
         } else if (OnForm(PlayForm)) {
             LayoutPlayForm();
@@ -929,13 +1032,15 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
         case frmOpenEvent:
             if (OnForm(MainForm)) {
                 InitMainForm(s);
+                UseApplicationFocus();
                 EnterInputArea();
                 LayoutMainForm(s);
                 FrmDrawForm(FrmGetActiveForm());
             } else if (OnForm(SavedForm)) {
+                UseApplicationFocus();
                 EnterInputArea();
-                LayoutSavedForm();
                 OpenSavedForm(s);
+                LayoutSavedForm(s);
                 FrmDrawForm(FrmGetActiveForm());
             } else if (OnForm(PlayForm)) {
                 EnterInputArea();
@@ -944,6 +1049,7 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
             } else if (OnForm(FullForm)) {
                 OpenFullForm(s);
             } else if (OnForm(DetailForm)) {
+                UseApplicationFocus();
                 EnterInputArea();
                 LayoutDetailForm();
                 FrmSetFocus(FrmGetActiveForm(), noFocus);
@@ -968,24 +1074,12 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
             }
             if (OnForm(FullForm)) FillFullScreen(s);
             return true;
-        case lstSelectEvent:
-            if (eventP->data.lstSelect.listID == SavedList &&
-                eventP->data.lstSelect.selection >= 0 &&
-                (UInt16)eventP->data.lstSelect.selection < s->savedCount) {
-                SelectSaved(s);
-                return true;
-            }
-            break;
         case ctlSelectEvent:
             switch (eventP->data.ctlSelect.controlID) {
                 case SearchButton: StartSearch(s); return true;
                 case DownloadButton: StartDownload(s); return true;
                 case CancelButton: CancelJob(s); return true;
                 case BackButton: ReturnToMain(s); return true;
-                case SavedButton:
-                    StopThumbs(s);
-                    if (s->task == taskIdle) FrmPopupForm(SavedForm);
-                    return true;
                 case SavedBackButton: ReturnFromSaved(s); return true;
                 case SavedPlayButton: PlaySaved(s); return true;
                 case SavedDeleteButton: DeleteSaved(s); return true;
@@ -1010,6 +1104,23 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                     SwitchPlayQuality(s, (UInt16)selection);
                 return true;
             }
+            /* Handled here so the trigger keeps the screen's name. */
+            if (eventP->data.popSelect.controlID == MainScreenTrigger) {
+                if (eventP->data.popSelect.selection == screenDownloads) {
+                    StopThumbs(s);
+                    if (s->task == taskIdle) FrmPopupForm(SavedForm);
+                }
+                LstSetSelection((ListType *)GetObject(MainScreenList), screenHome);
+                return true;
+            }
+            if (eventP->data.popSelect.controlID == SavedScreenTrigger) {
+                if (eventP->data.popSelect.selection == screenHome)
+                    ReturnFromSaved(s);
+                else
+                    LstSetSelection((ListType *)GetObject(SavedScreenList),
+                        screenDownloads);
+                return true;
+            }
             /* Handled here so the trigger keeps its empty label. */
             if (eventP->data.popSelect.controlID == HistoryTrigger) {
                 Int16 selection = eventP->data.popSelect.selection;
@@ -1030,6 +1141,7 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 return true;
             break;
         case penDownEvent:
+            if (IsTitleForm()) ReleaseTitlePicker(s);
             if (OnForm(PlayForm) && s->playbackP != 0) {
                 RectangleType bounds;
                 if (TrackSeekBar(s, eventP) || TrackVolume(s, eventP))
@@ -1067,6 +1179,13 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
             }
             break;
         case keyDownEvent:
+            if (IsTitleForm()) {
+                if (TitlePickerFocused()) return HandleTitleKey(s, eventP);
+                /* The second half of the press that just left the picker */
+                if (IsDirectionKey(eventP) &&
+                        TimGetTicks() - s->titleTicks < SysTicksPerSecond() / 10)
+                    return true;
+            }
             if (OnForm(MainForm) && (eventP->data.keyDown.chr == chrLineFeed ||
                     eventP->data.keyDown.chr == chrCarriageReturn)) {
                 StartSearch(s);
@@ -1076,8 +1195,13 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 WChar c = eventP->data.keyDown.chr;
                 if (c == vchrPageUp || c == vchrRockerUp ||
                         c == vchrPageDown || c == vchrRockerDown) {
-                    MoveResultFocus(s, c == vchrPageUp || c == vchrRockerUp
-                        ? -1 : 1);
+                    Boolean up = c == vchrPageUp || c == vchrRockerUp;
+                    if (up && (s->resultFocus == NO_RESULT || s->resultFocus == 0) &&
+                            FocusTitlePicker(s, MainScreenTrigger)) {
+                        FocusResult(s, NO_RESULT);
+                        return true;
+                    }
+                    MoveResultFocus(s, up ? -1 : 1);
                     return true;
                 }
                 /* One press may arrive as both of these. */
@@ -1091,11 +1215,26 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                     return true;
                 }
             }
+            if (OnForm(SavedForm) && HandleSavedKey(s, eventP)) return true;
             if ((OnForm(PlayForm) || OnForm(FullForm)) && HandlePlayKey(s, eventP))
+                return true;
+            if (OnForm(DetailForm) && eventP->data.keyDown.chr == vchrPageUp &&
+                    HasDetailPicker(s) && InfoAtTop() &&
+                    FocusTitlePicker(s, DetailQualityTrigger))
                 return true;
             if (OnForm(DetailForm) && (eventP->data.keyDown.chr == vchrPageUp ||
                     eventP->data.keyDown.chr == vchrPageDown)) {
                 ScrollInfo(eventP->data.keyDown.chr == vchrPageUp ? -5 : 5);
+                return true;
+            }
+            /* One press may arrive as both of these. */
+            if (OnForm(DetailForm) && (eventP->data.keyDown.chr == vchrRockerCenter ||
+                    NavPressed(eventP, navBitSelect, navChangeSelect))) {
+                UInt32 now = TimGetTicks();
+                if (now - s->lastCentre >= SysTicksPerSecond() / 4 &&
+                        CanPlayDetail(s))
+                    PlayDetail(s);
+                s->lastCentre = now;
                 return true;
             }
             break;
@@ -1107,6 +1246,13 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                     : eventP->data.sclExit.newValue;
                 ScrollResults(s, to - (Int16)s->resultTop);
                 /* Returning false keeps a held arrow repeating. */
+                return eventP->eType == sclExitEvent;
+            }
+            if (OnForm(SavedForm)) {
+                Int16 to = eventP->eType == sclRepeatEvent
+                    ? eventP->data.sclRepeat.newValue
+                    : eventP->data.sclExit.newValue;
+                ScrollSaved(s, to - (Int16)s->savedTop);
                 return eventP->eType == sclExitEvent;
             }
             if (OnForm(DetailForm)) {
@@ -1200,7 +1346,7 @@ static void StopApplication(AppState *s)
                 FrmGetObjectIndex(mainP, SearchField)), 0);
     }
     FrmCloseAllForms();
-    if (s->savedNamesP != 0) MemPtrFree(s->savedNamesP);
+    FreeSaved(s);
     if (s->jisH != 0) {
         MemHandleUnlock(s->jisH);
         DmReleaseResource(s->jisH);

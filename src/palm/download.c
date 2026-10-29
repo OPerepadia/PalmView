@@ -275,6 +275,7 @@ static void StartMerge(AppState *s)
     VFSFileDelete(s->volume, s->videoPath);
     VFSFileDelete(s->volume, s->audioPath);
     s->percent = 100;
+    SaveThumbBeside(s, s->selected, s->outPath);
     FindSavedCopy(s);
     StrCopy(s->progress, "Saved ");
     Append(s->progress, sizeof(s->progress), s->outPath);

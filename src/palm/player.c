@@ -69,10 +69,10 @@ static void FillBar(RectangleType *rP, Coord width, UInt8 gray)
     WinDrawRectangle(rP, 0);
 }
 
-/* In the color theme's title bar color */
-static void FillThemeBar(RectangleType *rP, Coord width)
+static void FillAccentBar(RectangleType *rP, Coord width)
 {
-    WinSetForeColor(UIColorGetTableEntryIndex(UIFormFrame));
+    static const RGBColorType kAccent = ACCENT_COLOR;
+    WinSetForeColorRGB(&kAccent, 0);
     rP->extent.x = width;
     WinDrawRectangle(rP, 0);
 }
@@ -102,9 +102,9 @@ void DrawSeekBar(const AppState *s)
     RctSetRectangle(&bar, bounds.topLeft.x, bounds.topLeft.y + 2, 0, 2);
     FillBar(&bar, bounds.extent.x, 0xC8);
     FillBar(&bar, BarX(loaded, duration, bounds.extent.x), 0x80);
-    FillThemeBar(&bar, played);
+    FillAccentBar(&bar, played);
     RctSetRectangle(&bar, bounds.topLeft.x + played, bounds.topLeft.y + 1, 0, 4);
-    FillThemeBar(&bar, 4);
+    FillAccentBar(&bar, 4);
     WinPopDrawState();
 }
 
@@ -145,7 +145,7 @@ void DrawVolume(const AppState *s)
             (VOLUME_LEVELS - 2);
         bar.topLeft.x = bounds.topLeft.x + (level - 1) * step;
         bar.topLeft.y = bounds.topLeft.y + bounds.extent.y - bar.extent.y;
-        if (level <= s->prefs.volume) FillThemeBar(&bar, step * 2 / 3);
+        if (level <= s->prefs.volume) FillAccentBar(&bar, step * 2 / 3);
         else FillBar(&bar, step * 2 / 3, 0xC8);
     }
     WinSetCoordinateSystem(coordinates);
@@ -663,7 +663,7 @@ void ReturnFromPlay(AppState *s)
     ClosePlayback(s);
     FrmReturnToForm(0);
     if (OnForm(DetailForm)) LayoutDetailForm();
-    else if (OnForm(SavedForm)) LayoutSavedForm();
+    else if (OnForm(SavedForm)) LayoutSavedForm(s);
     FrmDrawForm(FrmGetActiveForm());
     if (OnForm(DetailForm)) {
         /* The sizes are for the quality chosen in the player. */

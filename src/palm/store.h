@@ -15,6 +15,8 @@
 Err StoreOpenVolume(UInt16 *volumeP);
 Err StoreFreeBytes(UInt16 volume, UInt32 *freeP);
 void StoreMakePath(Char *pathP, const Char *nameP);
+/* The thumbnail beside a video: .jpg for .mp4 */
+void StoreThumbPath(Char *pathP, const Char *videoPathP);
 
 /* Opens a file for appending; *sizeP receives its current size. */
 Err StoreOpenAppend(UInt16 volume, const Char *pathP, FileRef *fileP,

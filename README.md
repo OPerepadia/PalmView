@@ -46,17 +46,24 @@ You need Palm OS 5, Wi-Fi and an SD card. On the TX:
 3. When the video comes in both 144p and 240p, pick one at the top right.
    Then tap **Play** to stream it, or **Download** to save it. Download
    progress shows the speed and TLS handshake time.
-4. A downloaded video is saved as `/PalmView/<title>.mp4` on the card. Tap
-   **Play** to watch it, or open it in CorePlayer.
+4. A downloaded video is saved as `/PalmView/<title>.mp4` on the card, with
+   its thumbnail beside it as `<title>.jpg`. Tap **Play** to watch it, or
+   open it in CorePlayer.
 5. When a video is already on the card, its details say which quality, such
    as `Saved: 240p, 9.8 MB.` The picker starts on that quality, and **Play**
    opens the saved copy. Pick the other quality to stream it instead.
    Downloading it overwrites the saved copy.
 
-**Downloads** at the top right of the main screen lists the videos on the
-card. Tap one to select it. A line above the buttons shows its frame size,
-length and file size, such as `426x240 | 7:09 | 9.8 MB`. Then tap **Play**
-or **Delete**. In the player, tap **Pause** or the 5-way centre to pause.
+The dropdown at the top right of the main screen opens **Downloads**, which
+lists the videos on the card, like the search results: a thumbnail with the
+length on it, the title, and the quality and file size, such as
+`240p · 9.8 MB`. Videos downloaded before thumbnails were saved show a gray
+box. Tap one to select it, or use the 5-way up and down. Then tap **Play**
+(or press the 5-way centre) or **Delete**. The dropdown there, or **Back**,
+returns to the main screen. With the 5-way, press up from the first row to
+reach the dropdown, centre to open it, and down to go back to the list.
+Details has the same for the quality picker. In the player, tap **Pause** or the 5-way centre
+to pause.
 
 While streaming, the bar under the video shows the position in red and
 what has downloaded in dark gray. Tap or drag on it to jump there, or
