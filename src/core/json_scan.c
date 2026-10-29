@@ -346,12 +346,29 @@ void JsonScanInit(JsonScanner *scannerP, Char *valueP, UInt16 valueCapacity,
     scannerP->state = stValue;
 }
 
+/* Copies the plain bytes of a string value, most of a reply, in one loop
+ * instead of a Step per byte. Returns how many it took. */
+static UInt16 CopyPlain(JsonScanner *s, const UInt8 *dataP, UInt16 length)
+{
+    UInt16 i = 0, room = (UInt16)(s->valueCapacity - 1);
+    for (; i < length && dataP[i] != '"' && dataP[i] != '\\'; i++) {
+        if (s->valueLength < room) s->valueP[s->valueLength++] = (Char)dataP[i];
+        else s->valueTruncated = true;
+    }
+    return i;
+}
+
 UInt16 JsonScanFeed(JsonScanner *scannerP, const UInt8 *dataP, UInt16 length)
 {
     UInt16 i = 0;
     if (scannerP->status != jsonOk) return scannerP->status;
     while (i < length) {
         Boolean consumed;
+        if (scannerP->state == stString && scannerP->stringState == strNormal &&
+                !scannerP->inKey) {
+            i += CopyPlain(scannerP, dataP + i, (UInt16)(length - i));
+            if (i == length) break;
+        }
         if (!Step(scannerP, dataP[i], &consumed)) return scannerP->status;
         if (consumed) i++;
     }
@@ -392,24 +409,26 @@ static UInt16 CountComponents(const Char *patternP)
     return count;
 }
 
+/* Matches the path from level to its end. Most patterns fail on their
+ * first key, so nothing is counted first. */
 static Boolean MatchFrom(const JsonScanner *s, UInt16 level,
                          const Char *patternP)
 {
     while (*patternP != '\0') {
         const Char *endP = patternP;
+        if (level >= s->depth) return false;
         while (*endP != '\0' && *endP != '/') endP++;
         if (!ComponentMatches(&s->frames[level], patternP,
                 (UInt16)(endP - patternP))) return false;
         level++;
         patternP = *endP == '/' ? endP + 1 : endP;
     }
-    return true;
+    return level == s->depth;
 }
 
 Boolean JsonPathIs(const JsonScanner *scannerP, const Char *patternP)
 {
     if (scannerP->overflowDepth != 0) return false;
-    if (CountComponents(patternP) != scannerP->depth) return false;
     return MatchFrom(scannerP, 0, patternP);
 }
 
@@ -423,8 +442,7 @@ Boolean JsonPathEndsWith(const JsonScanner *scannerP, const Char *patternP)
 Boolean JsonPathFrom(const JsonScanner *scannerP, UInt16 level,
                      const Char *patternP)
 {
-    if (scannerP->overflowDepth != 0 || level > scannerP->depth ||
-        CountComponents(patternP) != scannerP->depth - level) return false;
+    if (scannerP->overflowDepth != 0) return false;
     return MatchFrom(scannerP, level, patternP);
 }
 

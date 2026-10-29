@@ -322,34 +322,49 @@ static Boolean StringIs(const Char *textP, const Char *expectedP)
     return StrCompare(textP, expectedP) == 0;
 }
 
-Boolean YtPlayerValue(void *contextP, const JsonScanner *s, UInt16 type,
-                      const Char *textP, UInt16 length)
+/* Inside streamingData/adaptiveFormats/#, where most of the reply is:
+ * checked once per value, not once per field. */
+static Boolean InFormat(const JsonScanner *s)
 {
-    YtPlayer *p = (YtPlayer *)contextP;
-    if (JsonPathFrom(s, 0, "streamingData/adaptiveFormats/#/itag")) {
+    return s->overflowDepth == 0 && s->depth > 3 && !s->frames[0].isArray &&
+        StringIs(s->frames[0].key, "streamingData") && !s->frames[1].isArray &&
+        StringIs(s->frames[1].key, "adaptiveFormats") && s->frames[2].isArray;
+}
+
+/* A value of the adaptive format being read */
+static void FormatValue(YtPlayer *p, const JsonScanner *s, const Char *textP,
+                        UInt16 length)
+{
+    if (JsonPathFrom(s, 3, "itag")) {
         UInt32 itag = 0;
         TextParseUInt32(textP, &itag);
         p->curItag = (UInt16)itag;
-    } else if (JsonPathFrom(s, 0, "streamingData/adaptiveFormats/#/url")) {
+    } else if (JsonPathFrom(s, 3, "url")) {
         if (s->valueTruncated) {
             p->curUnusable = true;
         } else {
             MemMove(p->curUrl, textP, length + 1);
             p->curHasUrl = true;
         }
-    } else if (JsonPathFrom(s, 0,
-                   "streamingData/adaptiveFormats/#/contentLength")) {
+    } else if (JsonPathFrom(s, 3, "contentLength")) {
         TextParseUInt32(textP, &p->curLength);
-    } else if (JsonPathFrom(s, 0,
-                   "streamingData/adaptiveFormats/#/indexRange/end")) {
+    } else if (JsonPathFrom(s, 3, "indexRange/end")) {
         if (TextParseUInt32(textP, &p->curIndexEnd)) p->curIndexEnd++;
-    } else if (JsonPathFrom(s, 0,
-                   "streamingData/adaptiveFormats/#/signatureCipher") ||
-               JsonPathFrom(s, 0, "streamingData/adaptiveFormats/#/drmFamilies/#")) {
+    } else if (JsonPathFrom(s, 3, "signatureCipher") ||
+               JsonPathFrom(s, 3, "drmFamilies/#")) {
         p->curUnusable = true;
-    } else if (JsonPathFrom(s, 0, "streamingData/adaptiveFormats/#/type")) {
+    } else if (JsonPathFrom(s, 3, "type")) {
         /* OTF streams are only served in numbered segments. */
         if (StringIs(textP, "FORMAT_STREAM_TYPE_OTF")) p->curUnusable = true;
+    }
+}
+
+Boolean YtPlayerValue(void *contextP, const JsonScanner *s, UInt16 type,
+                      const Char *textP, UInt16 length)
+{
+    YtPlayer *p = (YtPlayer *)contextP;
+    if (InFormat(s)) {
+        FormatValue(p, s, textP, length);
     } else if (JsonPathIs(s, "playabilityStatus/status")) {
         CopyField(p->status, sizeof(p->status), textP);
     } else if (JsonPathIs(s, "playabilityStatus/reason")) {
@@ -382,7 +397,8 @@ Boolean YtPlayerEnd(void *contextP, const JsonScanner *s)
 {
     YtPlayer *p = (YtPlayer *)contextP;
     UInt16 rank, i;
-    if (!JsonPathIs(s, "streamingData/adaptiveFormats/#")) return true;
+    if (s->depth != 3 || !JsonPathIs(s, "streamingData/adaptiveFormats/#"))
+        return true;
     /* contentLength is required: downloads are made in ranges. */
     if (p->curHasUrl && !p->curUnusable && p->curLength != 0) {
         for (i = 0; i < YT_VIDEO_CHOICES; i++)
@@ -438,18 +454,13 @@ static UInt16 RendererLevel(const JsonScanner *s)
 static Boolean TextField(const JsonScanner *s, UInt16 level,
                          const Char *nameP, Boolean *firstRunP)
 {
-    Char pattern[48];
-    UInt16 length = 0;
-    TextAppend(pattern, sizeof(pattern), &length, nameP);
-    TextAppend(pattern, sizeof(pattern), &length, "/simpleText");
-    if (JsonPathFrom(s, level, pattern)) {
+    if (level >= s->depth || s->frames[level].isArray ||
+        !StringIs(s->frames[level].key, nameP)) return false;
+    if (JsonPathFrom(s, (UInt16)(level + 1), "simpleText")) {
         *firstRunP = true;
         return true;
     }
-    length = StrLen(nameP);
-    pattern[length] = '\0';
-    TextAppend(pattern, sizeof(pattern), &length, "/runs/#/text");
-    if (JsonPathFrom(s, level, pattern)) {
+    if (JsonPathFrom(s, (UInt16)(level + 1), "runs/#/text")) {
         *firstRunP = JsonIndexAt(s, (UInt16)(level + 2)) == 0;
         return true;
     }
