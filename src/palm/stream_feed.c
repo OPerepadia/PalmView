@@ -11,9 +11,6 @@
 
 /* The most one request asks for. */
 #define REQUEST_BYTES (128UL * 1024UL)
-/* A stream asks again once this share of its ring is free, or room for the
- * rest of it. The stream with the emptier ring goes first. */
-#define REFILL_DIVISOR 4
 /* Failed connections in a row before giving up; the wait before trying
  * again grows by RETRY_SECONDS each time. */
 #define MAX_FAILURES 5
@@ -297,7 +294,7 @@ static UInt32 Want(const FeedTrack *t)
     if (t->waiting && (Int32)(TimGetTicks() - t->retryTicks) < 0) return 0;
     left = end - t->offset;
     space = Mp4StreamSpace(t->streamP);
-    need = t->streamP->capacity / REFILL_DIVISOR;
+    need = t->streamP->capacity / STREAM_FEED_REFILL_DIVISOR;
     if (need > left) need = left;
     if (space < need) return 0;
     return (space << 8) / t->streamP->capacity + 1;

@@ -577,14 +577,17 @@ UInt32 PlaybackBufferedMs(const Playback *p, UInt16 track)
     return buffered / perSecond * 1000UL + buffered % perSecond * 1000UL / perSecond;
 }
 
-/* Both streams have ms of playback in, or as much as their rings hold. */
+/* Both streams have ms of playback in, or as much as their rings hold. A
+ * ring counts as full once the feed stops asking for more: after a seek,
+ * sound before the start fills it until the decoders run. */
 static Boolean StreamsBuffered(const Playback *p, UInt32 ms)
 {
     UInt16 i;
     for (i = 0; i < 2; i++) {
         const Mp4Stream *s = &p->streams[i];
         if (!s->ready) return false;
-        if (PlaybackBufferedMs(p, i) < ms && Mp4StreamSpace(s) >= s->capacity / 8)
+        if (PlaybackBufferedMs(p, i) < ms &&
+            Mp4StreamSpace(s) >= s->capacity / STREAM_FEED_REFILL_DIVISOR)
             return false;
     }
     return true;

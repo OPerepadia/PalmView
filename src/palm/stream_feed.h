@@ -16,6 +16,9 @@
 
 #define STREAM_FEED_VIDEO 0
 #define STREAM_FEED_AUDIO 1
+/* A stream asks again once this share of its ring is free, or room for the
+ * rest of it. */
+#define STREAM_FEED_REFILL_DIVISOR 4
 
 typedef struct StreamFeed StreamFeed;
 
