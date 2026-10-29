@@ -273,12 +273,34 @@ void ClosePlayback(AppState *s)
     s->resumeOnEnter = false;
 }
 
+/* Logs the three largest free pieces of the heap, by taking each in
+ * turn and then giving them all back. */
+static void LogFreePieces(AppState *s)
+{
+    void *piecesP[3];
+    UInt32 sizes[3];
+    UInt16 count, i;
+    MemSet(sizes, sizeof(sizes), 0);
+    for (count = 0; count < 3; count++) {
+        UInt32 freeBytes = 0, size = 0;
+        MemHeapFreeBytes(0, &freeBytes, &size);
+        while (size >= 1024 && (piecesP[count] = ArmLargeAlloc(size)) == 0)
+            size -= size / 16;
+        if (size < 1024) break;
+        sizes[count] = size;
+    }
+    UdpLogLine(s->logP, "mem", "free pieces % + % + % KB",
+        sizes[0] / 1024, sizes[1] / 1024, sizes[2] / 1024);
+    for (i = 0; i < count; i++) MemPtrFree(piecesP[i]);
+}
+
 /* Streams the selected video from startMs when playPath is empty. When
  * 240p cannot start, for want of memory, it streams 144p. */
 static const Char *StartPlayback(AppState *s, UInt32 startMs)
 {
     UInt16 choice = VideoChoice(s);
     const Char *errorP;
+    if (s->logP != 0) LogFreePieces(s);
     s->playbackP = (Playback *)MemPtrNew(sizeof(Playback));
     if (s->playbackP == 0) return "Out of memory.";
     if (s->playPath[0] != '\0') return PlaybackOpen(s->playbackP, s->playPath);

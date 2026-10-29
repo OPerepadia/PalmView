@@ -12,6 +12,8 @@
  * 1.55 MB. Without sound, 1.1 MB is enough. */
 #define ARENA_LIMIT (1792UL * 1024)
 #define ARENA_MINIMUM (1152UL * 1024)
+/* Below this, 144p tops up its heap from other chunks. */
+#define ARENA_WANTED (1664UL * 1024)
 #define QUEUE_DEPTH 3
 /* Frames bigger than 144p are large. 240p peaks near 2.07 MB with two
  * queued frames, at the lowest level, which is all a Palm TX keeps up
@@ -60,6 +62,10 @@
 #define MAX_CALM_WINDOWS 12
 #define CALM_CPU_PERCENT 70
 #define LEVEL_HOLD_SECONDS 10
+/* 144p starts at level 2, where a TX usually settles. The first seconds
+ * after a start are late at any level, so they keep it. */
+#define START_LEVEL 2
+#define START_SETTLE_WINDOWS 5
 /* PlaybackStep keeps working this long unless an event is waiting: each
  * turn of the event loop costs time under PACE. */
 #define STEP_SLICE_MS 50
@@ -342,12 +348,12 @@ static void FreeExtra(Playback *p)
 }
 
 /* Adds blocks to the decoder's heap, each from the largest free chunk,
- * until it reaches LARGE_HEAP. */
-static Boolean AddExtra(Playback *p)
+ * until it reaches target. */
+static Boolean AddExtra(Playback *p, UInt32 target)
 {
-    while (p->arenaSize + p->extraSize < LARGE_HEAP && p->extraCount < EXTRA_BLOCKS) {
+    while (p->arenaSize + p->extraSize < target && p->extraCount < EXTRA_BLOCKS) {
         UInt32 freeBytes = 0, maxChunk = 0;
-        UInt32 need = LARGE_HEAP - p->arenaSize - p->extraSize;
+        UInt32 need = target - p->arenaSize - p->extraSize;
         UInt32 size = need, minimum = need < EXTRA_MINIMUM ? need : EXTRA_MINIMUM;
         UInt8 *blockP;
         MemHeapFreeBytes(0, &freeBytes, &maxChunk);
@@ -362,7 +368,7 @@ static Boolean AddExtra(Playback *p)
         p->extraSize += size;
         Call(p, armCmdHeapAdd, (UInt32)blockP, size, 0, 0);
     }
-    return p->arenaSize + p->extraSize >= LARGE_HEAP;
+    return p->arenaSize + p->extraSize >= target;
 }
 
 /* Brings the decoder's heap up to LARGE_HEAP. A saved file is only known
@@ -372,13 +378,13 @@ static const Char *AddLargeHeap(Playback *p)
 {
     const Char *errorP;
     if (p->arenaSize + p->extraSize >= LARGE_HEAP) return 0;
-    if (!AddExtra(p) && !p->decoderOpen && !p->ringOpen) {
+    if (!AddExtra(p, LARGE_HEAP) && !p->decoderOpen && !p->ringOpen) {
         FreeExtra(p);
         MemPtrFree(p->arenaP);
         p->arenaP = 0;
         errorP = AllocateArena(p, true);
         if (errorP != 0) return errorP;
-        AddExtra(p);
+        AddExtra(p, LARGE_HEAP);
     }
     if (p->arenaSize + p->extraSize < LARGE_HEAP)
         return "Not enough free memory for this video.";
@@ -419,7 +425,7 @@ static const Char *StartDecoders(Playback *p)
     p->catchingUp = false;
     p->decodeMs = 0;
     p->skippedInRow = 0;
-    p->settling = false;
+    p->settleWindows = 0;
     p->soundInputEnded = false;
     p->soundBuffered = 0;
     p->soundPlayed = 0;
@@ -434,7 +440,7 @@ static const Char *StartDecoders(Playback *p)
 /* A seek keeps the level: the video is the same. */
 static void ResetLevel(Playback *p)
 {
-    p->level = p->bestLevel;
+    p->level = p->bestLevel > START_LEVEL ? p->bestLevel : START_LEVEL;
     p->calmWindows = 0;
     p->calmNeeded = CALM_WINDOWS;
     p->strained = false;
@@ -462,7 +468,9 @@ static const Char *LoadDecoder(Playback *p, Boolean large)
     p->moduleLoaded = true;
     errorP = AllocateArena(p, large);
     if (errorP != 0) return errorP;
-    return large ? AddLargeHeap(p) : 0;
+    if (large) return AddLargeHeap(p);
+    AddExtra(p, ARENA_WANTED);
+    return 0;
 }
 
 const Char *PlaybackOpen(Playback *p, const Char *pathP)
@@ -763,8 +771,8 @@ static void EndWindow(Playback *p)
     late = p->windowLate >= MIN_LATE_FRAMES &&
         (UInt32)p->windowLate * 10UL > p->windowFrames;
     busy = late && p->cpuPercent >= BUSY_CPU_PERCENT;
-    if (p->settling) {
-        p->settling = false;
+    if (p->settleWindows != 0) {
+        p->settleWindows--;
     } else if (busy && p->level + 1 < PLAYBACK_LEVELS &&
                (p->level + 2 < PLAYBACK_LEVELS || p->strained)) {
         if (p->lastLevelDown != 0 &&
@@ -837,6 +845,7 @@ static Boolean ReadyToStart(Playback *p)
     if (p->soundOn && !p->soundInputEnded && p->soundBuffered < SOUND_PREFILL_FRAMES)
         return false;
     p->started = true;
+    p->settleWindows = START_SETTLE_WINDOWS;
     /* A seek starts later in the same timeline. A stream that started
      * partway in counts back from its first frame. */
     if (!p->firstPtsKnown) {
@@ -943,7 +952,7 @@ static Boolean Buffering(Playback *p)
     p->buffering = false;
     SetClock(p, p->pausedMs);
     SetSoundPaused(p, false);
-    p->settling = true;
+    p->settleWindows = 1;
     ResetWindow(p);
     return false;
 }
@@ -1062,7 +1071,7 @@ void PlaybackPlay(Playback *p)
     }
     if (p->started) {
         SetClock(p, p->pausedMs);
-        p->settling = true;
+        p->settleWindows = 1;
     }
     if (!p->buffering) SetSoundPaused(p, false);
     ResetWindow(p);

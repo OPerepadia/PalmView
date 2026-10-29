@@ -261,6 +261,10 @@ of a TX's heap. It takes the rest from up to four smaller blocks, since
 free memory is often in pieces. When there is not enough memory for
 that, PalmView streams 144p instead.
 
+144p needs about 1.6 MB. Usually the largest block has room for that.
+When it does not, 144p takes the rest from smaller blocks the same way.
+Otherwise it runs short and drops most frames.
+
 In the player, 240p is shrunk by 4 to 3, from 426x240 to 319x180. Each
 picture pixel averages the luma of the source pixels it covers, with
 weights of 3:1, 1:1 or 1:3 across and down. Taking the nearest pixel

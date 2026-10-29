@@ -122,7 +122,7 @@ typedef struct Playback {
     UInt16 calmWindows;
     UInt16 calmNeeded;      /* grows when a level does not hold */
     UInt32 lastLevelDown;   /* ticks, 0 if never */
-    Boolean settling;       /* just resumed: this window keeps the level */
+    UInt16 settleWindows;   /* just started or resumed: these keep the level */
     Boolean strained;       /* the last window was late with the CPU busy */
 
     /* Statistics; the window restarts every second */
