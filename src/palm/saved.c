@@ -108,8 +108,18 @@ static void DrawSavedRow(AppState *s, UInt16 row)
 
 static void DrawSaved(AppState *s)
 {
+    static const Char kEmpty[] = "No downloads yet.";
+    RectangleType bounds;
     UInt16 row;
     for (row = 0; row < s->savedRows; row++) DrawSavedRow(s, row);
+    if (s->savedCount != 0) return;
+    GetSavedBounds(&bounds);
+    WinPushDrawState();
+    FntSetFont(stdFont);
+    WinDrawChars(kEmpty, sizeof(kEmpty) - 1, bounds.topLeft.x +
+        (bounds.extent.x - FntCharsWidth(kEmpty, sizeof(kEmpty) - 1)) / 2,
+        bounds.topLeft.y + (s->savedRowHeight - FntLineHeight()) / 2);
+    WinPopDrawState();
 }
 
 /* Keeps thumbnails only for the rows in view. */
@@ -150,15 +160,9 @@ static void LoadSaved(AppState *s)
     s->savedFocus = NO_RESULT;
 }
 
-static const Char *SavedHint(const AppState *s)
-{
-    return s->savedCount == 0 ? "No downloads yet." : "Select a video.";
-}
-
-/* With a video selected, Play and Delete take the status line's place. */
+/* Play and Delete show while a video is selected. */
 static void ShowSavedActions(Boolean selected)
 {
-    ShowObject(SavedStatusField, !selected);
     ShowObject(SavedPlayButton, selected);
     ShowObject(SavedDeleteButton, selected);
 }
@@ -248,8 +252,6 @@ void OpenSavedForm(AppState *s)
     FrmSetGadgetHandler(formP, index, SavedGadgetHandler);
     LstSetSelection((ListType *)GetObject(SavedScreenList), screenDownloads);
     LoadSaved(s);
-    StrCopy(s->savedStatus, SavedHint(s));
-    FldSetTextPtr((FieldType *)GetObject(SavedStatusField), s->savedStatus);
 }
 
 Boolean ReadSavedVideo(const Char *pathP, SavedVideo *videoP)
@@ -336,6 +338,7 @@ Boolean HandleSavedKey(AppState *s, const EventType *eventP)
 void DeleteSaved(AppState *s)
 {
     Char name[SAVED_NAME_CAPACITY], path[STORE_PATH_CAPACITY];
+    Char thumbPath[STORE_PATH_CAPACITY];
     UInt16 volume, length;
     if (s->savedFocus == NO_RESULT || s->savedFocus >= s->savedCount) return;
     StrCopy(name, SavedName(s, s->savedFocus));
@@ -343,18 +346,15 @@ void DeleteSaved(AppState *s)
     length = StrLen(name);
     if (length > 4) name[length - 4] = '\0';
     if (FrmCustomAlert(DeleteVideoAlert, name, "", "") != 0) return;
-    if (StoreOpenVolume(&volume) == errNone && VFSFileDelete(volume, path) == errNone) {
-        Char thumbPath[STORE_PATH_CAPACITY];
-        StoreThumbPath(thumbPath, path);
-        VFSFileDelete(volume, thumbPath);
-        LoadSaved(s);
-        ShowSaved(s, true);
-        StrCopy(s->savedStatus, s->savedCount == 0 ? SavedHint(s) : "Deleted.");
-    } else {
-        StrCopy(s->savedStatus, "Could not delete.");
+    if (StoreOpenVolume(&volume) != errNone || VFSFileDelete(volume, path) != errNone) {
+        FrmAlert(DeleteFailedAlert);
+        return;
     }
+    StoreThumbPath(thumbPath, path);
+    VFSFileDelete(volume, thumbPath);
+    LoadSaved(s);
+    ShowSaved(s, true);
     ShowSavedActions(false);
-    SetFieldText(SavedStatusField, s->savedStatus);
 }
 
 /* The Downloads form at 160 high, from app.rcp */
@@ -362,7 +362,6 @@ void DeleteSaved(AppState *s)
 #define SAVED_LIST_Y 16
 #define SAVED_BOTTOM 18
 #define SAVED_BUTTONS_Y 145
-#define SAVED_STATUS_Y 146
 
 /* Fits the form to the screen, with whole rows in the list. */
 void LayoutSavedForm(AppState *s)
@@ -387,8 +386,6 @@ void LayoutSavedForm(AppState *s)
         listHeight);
     SetObjectY(formP, FrmGetObjectIndex(formP, SavedScrollBar), SAVED_LIST_Y,
         listHeight);
-    SetObjectY(formP, FrmGetObjectIndex(formP, SavedStatusField),
-        SAVED_STATUS_Y + extra, 0);
     for (i = 0; i < sizeof(kButtonIds) / sizeof(kButtonIds[0]); i++)
         SetObjectY(formP, FrmGetObjectIndex(formP, kButtonIds[i]),
             SAVED_BUTTONS_Y + extra, 0);

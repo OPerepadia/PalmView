@@ -53,7 +53,6 @@ BEGIN
     POPUPLIST ID SavedScreenTrigger SavedScreenList
     GADGET ID SavedGadget AT (0 16 153 126)
     SCROLLBAR ID SavedScrollBar AT (153 16 7 126) VALUE 0 MIN 0 MAX 0 PAGESIZE 3
-    FIELD ID SavedStatusField AT (2 146 112 12) NONEDITABLE SINGLELINE MAXCHARS 47
     BUTTON "Play" ID SavedPlayButton AT (2 145 40 12) NONUSABLE
     BUTTON "Delete" ID SavedDeleteButton AT (46 145 40 12) NONUSABLE
     BUTTON "Back" ID SavedBackButton AT (118 145 40 12)
@@ -112,6 +111,14 @@ BEGIN
     TITLE "Delete Video"
     MESSAGE "Delete ^1 from the card?"
     BUTTONS "Delete" "Cancel"
+END
+
+ALERT ID DeleteFailedAlert
+ERROR
+BEGIN
+    TITLE "Delete Video"
+    MESSAGE "The video could not be deleted."
+    BUTTONS "OK"
 END
 
 ALERT ID RomIncompatibleAlert

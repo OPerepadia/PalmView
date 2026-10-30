@@ -156,7 +156,6 @@ typedef struct AppState {
     UInt16 savedRows;
     Coord savedRowHeight;
     UInt16 savedFocus;          /* selected video, or NO_RESULT */
-    Char savedStatus[48];
 
     Playback *playbackP;        /* while PlayForm is up */
     StreamFeed *feedP;          /* while streaming */
