@@ -199,20 +199,27 @@ $(CODE2): $(ELF)
 $(RELOCS): $(ELF) tools/m68k-relocs.py
 	$(RELOCATE) $< $@
 
-# Launcher icons are 32x22, and 64x44 for high-density screens. Palm bitmaps
-# have one transparent color and no partial transparency. Pixels that are
-# mostly transparent stay so; the rest are blended with a light background
-# to soften the edge, which shows as a faint halo on dark wallpapers.
-ICONS := $(BUILD_DIR)/icon-color.bmp $(BUILD_DIR)/icon-color-hd.bmp
+# Icons are 32x22, and 64x44 for high density. The About logo is the icon at
+# 1.7x, cropped to 36x36 (72x72). Palm bitmaps have one transparent color and
+# no partial transparency, so edges are blended with a light background. That
+# leaves a faint halo on dark wallpapers.
+ICONS := $(BUILD_DIR)/icon-color.bmp $(BUILD_DIR)/icon-color-hd.bmp \
+	$(BUILD_DIR)/about.bmp $(BUILD_DIR)/about-hd.bmp
 ICON_EDGE := \( -clone 0 -alpha off -fill '\#ff00ff' -colorize 100 \) \
 	\( -clone 0 -background '\#dce6f0' -alpha remove -alpha off \) \
 	\( -clone 0 -alpha extract -threshold 15% \) \
 	-delete 0 -composite -colors 256 -compress none
 
+ABOUT_CROP = -gravity center -crop $(1)+0+0 +repage +gravity
+
 $(BUILD_DIR)/icon-color.bmp: src/palm/icon.svg | $(BUILD_DIR)
 	$(MAGICK) -background none -density 96 RSVG:$< $(ICON_EDGE) BMP3:$@
 $(BUILD_DIR)/icon-color-hd.bmp: src/palm/icon.svg | $(BUILD_DIR)
 	$(MAGICK) -background none -density 192 RSVG:$< $(ICON_EDGE) BMP3:$@
+$(BUILD_DIR)/about.bmp: src/palm/icon.svg | $(BUILD_DIR)
+	$(MAGICK) -background none -density 163 RSVG:$< $(call ABOUT_CROP,36x36) $(ICON_EDGE) BMP3:$@
+$(BUILD_DIR)/about-hd.bmp: src/palm/icon.svg | $(BUILD_DIR)
+	$(MAGICK) -background none -density 326 RSVG:$< $(call ABOUT_CROP,72x72) $(ICON_EDGE) BMP3:$@
 
 $(PRC): $(CODE) $(CODE2) $(RELOCS) $(ICONS) $(BUILD_DIR)/jis.bin \
 		$(RESOURCE_RCP) src/palm/resource.h certs/google.pem app.mk

@@ -52,7 +52,16 @@
 
 #define FullForm 1600
 
-#define AboutAlert 1300
+#define AboutForm 1700
+#define AboutOkButton 1701
+#define AboutLogo 1702
+#define AboutNameLabel 1703
+#define AboutVersionLabel 1704
+#define AboutLine1Label 1705
+#define AboutLine2Label 1706
+#define AboutLine3Label 1707
+#define AboutLicenseLabel 1708
+
 #define LibraryMissingAlert 1301
 #define RomIncompatibleAlert 1302
 #define DeleteVideoAlert 1303

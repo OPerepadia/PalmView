@@ -78,6 +78,19 @@ FORM ID FullForm AT (0 0 160 160) NOFRAME
 BEGIN
 END
 
+FORM ID AboutForm AT (2 2 156 156) MODAL DEFAULTBTNID AboutOkButton
+BEGIN
+    TITLE "About PalmView"
+    FORMBITMAP AT (60 20) BITMAP AboutLogo
+    LABEL "PalmView" ID AboutNameLabel AT (CENTER@78 60) FONT 1
+    LABEL "Version @APP_VERSION@" ID AboutVersionLabel AT (CENTER@78 72)
+    LABEL "YouTube client for Palm OS." ID AboutLine1Label AT (CENTER@78 88)
+    LABEL "Videos are saved to" ID AboutLine2Label AT (CENTER@78 100)
+    LABEL "/PalmView on the card." ID AboutLine3Label AT (CENTER@78 111)
+    LABEL "GPL-3.0-or-later." ID AboutLicenseLabel AT (CENTER@78 123)
+    BUTTON "OK" ID AboutOkButton AT (CENTER@78 139 40 12)
+END
+
 MENU ID MainMenuBar
 BEGIN
     PULLDOWN "Options"
@@ -86,14 +99,6 @@ BEGIN
         MENUITEM "Reset YouTube ID" ID MenuResetVisitor
         MENUITEM "About PalmView" ID MenuAbout
     END
-END
-
-ALERT ID AboutAlert
-INFORMATION
-BEGIN
-    TITLE "PalmView"
-    MESSAGE "Version @APP_VERSION@\n144p YouTube for Palm OS.\nVideos are saved to /PalmView on the card. Play them here or in CorePlayer.\nGPL-3.0-or-later. Uses PalmTLS and FFmpeg."
-    BUTTONS "OK"
 END
 
 ALERT ID LibraryMissingAlert
@@ -125,8 +130,14 @@ ALERT ID RomIncompatibleAlert
 ERROR
 BEGIN
     TITLE "Palm OS 5 Required"
-    MESSAGE "PalmView needs Palm OS 5 and a memory card."
+    MESSAGE "PalmView needs Palm OS 5."
     BUTTONS "OK"
+END
+
+BITMAPFAMILYEX ID AboutLogo
+BEGIN
+    BITMAP "about.bmp" BPP 8 TRANSPARENT 255 0 255
+    BITMAP "about-hd.bmp" BPP 8 DENSITY 144 TRANSPARENT 255 0 255
 END
 
 ICONFAMILYEX ID AppIcon

@@ -1267,7 +1267,9 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
             break;
         case menuEvent:
             if (eventP->data.menu.itemID == MenuAbout) {
-                FrmAlert(AboutAlert);
+                FormType *aboutP = FrmInitForm(AboutForm);
+                FrmDoDialog(aboutP);
+                FrmDeleteForm(aboutP);
                 return true;
             }
             if (eventP->data.menu.itemID == MenuClearHistory) {
