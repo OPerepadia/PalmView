@@ -2,7 +2,7 @@
 
 PalmView is a YouTube client for Palm OS 5, developed and tested on the Palm TX. It can search YouTube, play videos, or save them to an SD card for offline viewing.
 
-It runs entirely on the handheld, no helper server or proxy required. PalmView fetches H.264 and AAC streams directly from YouTube over HTTPS and decodes them using native ARM code, making it fast enough to play videos at 144p on a stock Palm TX. It may also work on other Palm OS 5 devices with sufficient memory.
+The app runs entirely on the handheld, no helper server or proxy required. It fetches H.264 and AAC streams directly from YouTube over HTTPS, with TLS provided by [PalmTLS](https://github.com/palmsnipe/palm-tls). It decodes the streams in native ARM code, fast enough to play videos at 144p on a stock Palm TX. It may also work on other Palm OS 5 devices with sufficient memory.
 
 > [!NOTE]
 > This project is a proof of concept. It was built to see if a handheld from 2005 could still play modern YouTube. It mostly works, but it's far from a polished app.
@@ -84,6 +84,12 @@ The PRCs end up in `dist/`.
 
 See [docs/technical.md](docs/technical.md) for more details on how PalmView works,
 the tests, debugging tools, etc.
+
+## Credits
+
+- [PalmTLS](https://github.com/palmsnipe/palm-tls) brings modern TLS to Palm OS.
+- [FFmpeg](https://ffmpeg.org/) decodes H.264 video and AAC sound.
+- [TJpgDec](https://elm-chan.org/fsw/tjpgd/) decodes thumbnails.
 
 ## License
 
