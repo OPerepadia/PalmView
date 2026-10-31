@@ -12,6 +12,7 @@
 
 #define STREAM_FEED_VIDEO 0
 #define STREAM_FEED_AUDIO 1
+#define STREAM_FEED_REFILL_DIVISOR 4
 
 typedef struct StreamFeed StreamFeed;
 

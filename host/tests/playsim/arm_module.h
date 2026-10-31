@@ -11,6 +11,7 @@
 #include "armcall.h"
 
 #define ARM_STACK_SIZE 65536UL
+#define ARM_DECODER_ID 1000
 
 typedef struct ArmModule {
     ArmCall *callP;
@@ -18,7 +19,7 @@ typedef struct ArmModule {
 } ArmModule;
 
 void *ArmLargeAlloc(UInt32 size);
-Err ArmModuleLoad(ArmModule *moduleP);
+Err ArmModuleLoad(ArmModule *moduleP, UInt16 firstId, UInt32 stackSize);
 void ArmModuleUnload(ArmModule *moduleP);
 Int32 ArmModuleCall(ArmModule *moduleP, UInt32 command, const UInt32 *argsP,
                     UInt16 argCount);

@@ -6,14 +6,14 @@
  * scales the video decode cost to stand for harder videos. The sound
  * stream calls SoundCallback as simulated time passes, like the OS would.
  *
- *   playback_sim FILE.mp4 [LOAD] [PAUSE_AT_SECONDS]
+ *   playback_sim FILE.mp4 [LOAD] [PAUSE_AT_SECONDS] [--seek AT TO]...
  *   playback_sim --stream VIDEO.mp4 AUDIO.mp4 KB_PER_S [OUTAGE_AT SECONDS]
  *       [--seek AT TO]... [--start SECONDS]
  *
  * The second form streams YouTube's two DASH files over a simulated
- * network of the given speed, which can drop out for a while. --seek moves
- * to TO seconds of the video once AT seconds have passed. --start begins
- * that far in, as switching quality does.
+ * network of the given speed, which can drop out for a while. --start
+ * begins that far in, as switching quality does. In both, --seek moves to
+ * TO seconds of the video once AT seconds have passed.
  *
  * Checks that every decoded frame is shown or skipped, that all sound is
  * played, that pausing holds the position, and that playback ends. Shows
@@ -274,10 +274,11 @@ void StreamFeedStep(StreamFeed *f, Boolean playing)
 
 void *ArmLargeAlloc(UInt32 size) { return LowAlloc(size); }
 
-Err ArmModuleLoad(ArmModule *m)
+Err ArmModuleLoad(ArmModule *m, UInt16 firstId, UInt32 stackSize)
 {
+    (void)firstId;
     m->callP = (ArmCall *)calloc(1, sizeof(ArmCall));
-    m->stackP = (UInt8 *)LowAlloc(ARM_STACK_SIZE);
+    m->stackP = (UInt8 *)LowAlloc(stackSize);
     return m->callP != 0 && m->stackP != 0 ? errNone : memErrNotEnoughSpace;
 }
 

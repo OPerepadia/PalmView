@@ -389,3 +389,51 @@ Boolean Mp4ReaderNext(Mp4Reader *r, Mp4ReadTrack *t, Mp4Sample *s)
         return FAIL(r, mp4MergeBadInput);
     return true;
 }
+
+static Boolean Rewind(Mp4Reader *r, Mp4ReadTrack *t)
+{
+    t->stsz.next = 0;
+    t->stco.next = 0;
+    t->stsc.next = 0;
+    t->stts.next = 0;
+    t->ctts.next = 0;
+    t->stss.next = 0;
+    t->sample = 0;
+    t->chunk = 0;
+    t->chunkSamplesLeft = 0;
+    t->position = 0;
+    t->dts = 0;
+    t->sttsLeft = 0;
+    t->sttsDelta = 0;
+    t->cttsLeft = 0;
+    t->cttsOffset = 0;
+    t->nextSync = 0;
+    return StartIteration(r, t);
+}
+
+static Boolean MoveTo(Mp4Reader *r, Mp4ReadTrack *t, UInt32 sample)
+{
+    Mp4Sample s;
+    if (!Rewind(r, t)) return false;
+    while (t->sample < sample)
+        if (!Mp4ReaderNext(r, t, &s)) return false;
+    return true;
+}
+
+Boolean Mp4ReaderSeek(Mp4Reader *r, Mp4ReadTrack *t, UInt32 dts,
+                      UInt32 minimum, UInt32 *foundP)
+{
+    UInt32 resume = t->sample, target = 0;
+    Boolean found = false;
+    Mp4Sample s;
+    if (!t->present || r->status != mp4MergeOk || !Rewind(r, t)) return false;
+    while (Mp4ReaderNext(r, t, &s)) {
+        if (!s.sync || s.dts < minimum) continue;
+        if (found && s.dts > dts) break;
+        found = true;
+        target = t->sample - 1;
+        *foundP = s.dts;
+    }
+    if (r->status != mp4MergeOk) return false;
+    return MoveTo(r, t, found ? target : resume) && found;
+}

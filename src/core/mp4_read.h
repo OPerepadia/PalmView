@@ -80,5 +80,9 @@ UInt16 Mp4ReaderOpen(Mp4Reader *readerP, Mp4ReadProc readProcP, void *fileP,
 /* Returns false at the end of the track or on error (see readerP->status). */
 Boolean Mp4ReaderNext(Mp4Reader *readerP, Mp4ReadTrack *trackP,
                       Mp4Sample *sampleP);
+/* Moves to the last sync sample at or before dts, not before minimum (or
+ * the first after minimum). Returns false, staying put, if there is none. */
+Boolean Mp4ReaderSeek(Mp4Reader *readerP, Mp4ReadTrack *trackP, UInt32 dts,
+                      UInt32 minimum, UInt32 *foundP);
 
 #endif

@@ -82,6 +82,10 @@ start of the segment, which begins with a keyframe. Sound segments are
 Switching quality fetches the new video's index first, then seeks the
 same way.
 
+A downloaded video has no segment index. Seeking goes back to the last
+keyframe before the time asked for, found by reading the sample tables
+from the start (`Mp4ReaderSeek`).
+
 ### 240p
 
 240p has 2.8 times the pixels of 144p. It always plays at the lowest
@@ -207,7 +211,7 @@ deps/venv/bin/python host/tests/arm_emulate.py build/arm/res VIDEO.mp4 \
 outages:
 
 ```sh
-build/host/playback_sim FILE [LOAD]
+build/host/playback_sim FILE [LOAD] [--seek AT TO]...
 build/host/playback_sim --stream testdata/media/ID.video.mp4 \
     testdata/media/ID.audio.mp4 30 [OUTAGE_AT SECONDS] [--seek AT TO]...
 ```

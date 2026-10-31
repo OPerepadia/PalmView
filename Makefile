@@ -111,6 +111,7 @@ PVIEW := $(HOST_DIR)/pview
 JSON_DUMP := $(HOST_DIR)/json_dump
 UNIT_TESTS := $(HOST_DIR)/unit_tests
 STREAM_TEST := $(HOST_DIR)/stream_test
+READ_SEEK_TEST := $(HOST_DIR)/read_seek_test
 FEED_TEST := $(HOST_DIR)/feed_test
 RGB_TEST := $(HOST_DIR)/rgb_test
 
@@ -336,6 +337,10 @@ $(STREAM_TEST): host/tests/stream_test.c $(HOST_SOURCES) $(TJPGD_FILES) \
 		$(wildcard src/core/*.h) host/shim/PalmOS.h | $(HOST_DIR)
 	$(HOST_CC) $(HOST_FLAGS) host/tests/stream_test.c $(HOST_SOURCES) -o $@
 
+$(READ_SEEK_TEST): host/tests/read_seek_test.c $(HOST_SOURCES) $(TJPGD_FILES) \
+		$(wildcard src/core/*.h) host/shim/PalmOS.h | $(HOST_DIR)
+	$(HOST_CC) $(HOST_FLAGS) host/tests/read_seek_test.c $(HOST_SOURCES) -o $@
+
 $(FEED_TEST): host/tests/feed_test.c src/palm/stream_feed.c src/palm/stream_feed.h \
 		src/palm/net_job.h $(HOST_SOURCES) $(TJPGD_FILES) $(wildcard src/core/*.h) \
 		host/shim/PalmOS.h | $(HOST_DIR)
@@ -344,7 +349,8 @@ $(FEED_TEST): host/tests/feed_test.c src/palm/stream_feed.c src/palm/stream_feed
 # Offline tests. JSON samples in testdata/ (not committed) are compared
 # with Python's parser when present. Downloaded streams in testdata/media/
 # are read as they would arrive over the network, through small rings.
-test: $(JSON_DUMP) $(UNIT_TESTS) $(PVIEW) $(STREAM_TEST) $(FEED_TEST) $(RGB_TEST)
+test: $(JSON_DUMP) $(UNIT_TESTS) $(PVIEW) $(STREAM_TEST) $(READ_SEEK_TEST) $(FEED_TEST) \
+		$(RGB_TEST)
 	$(UNIT_TESTS)
 	$(RGB_TEST)
 	@for video in $(wildcard testdata/media/*.video.mp4); do \
@@ -356,6 +362,7 @@ test: $(JSON_DUMP) $(UNIT_TESTS) $(PVIEW) $(STREAM_TEST) $(FEED_TEST) $(RGB_TEST
 			done; \
 		done; \
 		for seed in 1 2 3; do \
+			$(READ_SEEK_TEST) $(HOST_DIR)/$$id.merged.mp4 $$seed || exit 1; \
 			$(FEED_TEST) $$video $$audio 191 320 $$seed || exit 1; \
 			$(FEED_TEST) $$video $$audio 48 48 $$seed || exit 1; \
 		done; \

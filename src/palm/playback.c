@@ -392,14 +392,16 @@ static const Char *AddLargeHeap(Playback *p)
 }
 
 /* Streams fill in the reader's tracks themselves. */
+static const Char *OpenReader(Playback *p)
+{
+    return Mp4ReaderOpen(p->readerP, StoreMp4Read, (void *)p->file,
+        p->fileSize) == mp4MergeOk ? 0 : "This is not an MP4 file PalmView can read.";
+}
+
 static const Char *StartDecoders(Playback *p)
 {
     Mp4ReadTrack *t = &p->readerP->video;
     const Char *errorP;
-    if (p->feedP == 0 &&
-        Mp4ReaderOpen(p->readerP, StoreMp4Read, (void *)p->file, p->fileSize) !=
-            mp4MergeOk)
-        return "This is not an MP4 file PalmView can read.";
     if (!t->present || t->configLength == 0 || t->timescale == 0)
         return "The file has no H.264 video.";
     p->large = (UInt32)t->width * t->height > LARGE_PIXELS;
@@ -484,6 +486,7 @@ const Char *PlaybackOpen(Playback *p, const Char *pathP)
     p->fileOpen = true;
     errorP = LoadDecoder(p, false);
     ResetLevel(p);
+    if (errorP == 0) errorP = OpenReader(p);
     return errorP != 0 ? errorP : StartDecoders(p);
 }
 
@@ -1070,7 +1073,8 @@ void PlaybackPlay(Playback *p)
             OpenStreams(p);
         } else {
             ResetLevel(p);
-            if (StartDecoders(p) != 0) return;
+            p->seekMs = 0;
+            if (OpenReader(p) != 0 || StartDecoders(p) != 0) return;
         }
     }
     if (p->started) {
@@ -1094,7 +1098,8 @@ void PlaybackPause(Playback *p)
 
 Boolean PlaybackCanSeek(const Playback *p)
 {
-    return p->feedP != 0 && p->firstPtsKnown &&
+    if (p->feedP == 0) return p->decoderOpen;
+    return p->firstPtsKnown &&
         p->streams[STREAM_FEED_VIDEO].segmentCount != 0 &&
         p->streams[STREAM_FEED_AUDIO].segmentCount != 0 &&
         p->streams[STREAM_FEED_VIDEO].status == mp4MergeOk &&
@@ -1155,9 +1160,28 @@ static UInt32 SeekSegment(Playback *p, UInt16 video)
     return ms;
 }
 
+/* Files: video goes to a keyframe, sound to the packet at that time. */
+static UInt32 SeekFile(Playback *p, UInt32 ms, UInt32 minimum)
+{
+    Mp4Reader *r = p->readerP;
+    UInt32 dts;
+    if (!Mp4ReaderSeek(r, &r->video, MsToScale(ms, r->video.timescale),
+            MsToScale(minimum, r->video.timescale), &dts))
+        return PlaybackPositionMs(p);
+    StopDecoders(p);
+    ms = ScaleToMs(dts, r->video.timescale);
+    if (r->audio.present)
+        Mp4ReaderSeek(r, &r->audio, MsToScale(ms, r->audio.timescale), 0, &dts);
+    p->seekMs = ms;
+    p->seeks++;
+    p->errorP = StartDecoders(p);
+    return ms;
+}
+
 UInt32 PlaybackSeek(Playback *p, UInt32 ms)
 {
     if (!PlaybackCanSeek(p)) return PlaybackPositionMs(p);
+    if (p->feedP == 0) return SeekFile(p, ms, 0);
     return SeekSegment(p, FindSegment(p, ms));
 }
 
@@ -1167,6 +1191,9 @@ UInt32 PlaybackSkip(Playback *p, Boolean forward, UInt32 ms)
     UInt32 position = PlaybackPositionMs(p);
     UInt16 segment;
     if (!PlaybackCanSeek(p)) return position;
+    if (p->feedP == 0)
+        return forward ? SeekFile(p, position + ms, position + 1)
+            : SeekFile(p, position > ms ? position - ms : 0, 0);
     segment = FindSegment(p, forward ? position + ms : position > ms ? position - ms : 0);
     if (forward && SegmentMs(p, segment) <= position) {
         if (segment + 1 >= p->streams[STREAM_FEED_VIDEO].segmentCount) return position;
