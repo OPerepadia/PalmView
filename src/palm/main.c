@@ -204,6 +204,9 @@ static Err ConfigureNetwork(AppState *s)
         ? palmTlsProtocolTls13 : palmTlsProtocolTls12;
     s->netConfig.trustP = trustP;
     s->netConfig.trustLength = MemHandleSize(s->trustH);
+    s->updateTrustH = DmGetResource('cert', UpdateCertificates);
+    if (s->updateTrustH == 0) return dmErrResourceNotFound;
+    s->updateTrustP = (const UInt8 *)MemHandleLock(s->updateTrustH);
     s->netConfig.stepTimeoutTicks = (Int32)SysTicksPerSecond() / 2;
     if (s->netConfig.stepTimeoutTicks < 1) s->netConfig.stepTimeoutTicks = 1;
     s->netConfig.operationTimeoutTicks = (Int32)SysTicksPerSecond() *
@@ -837,6 +840,99 @@ static void FinishSearch(AppState *s)
     StartThumbs(s);
 }
 
+/* Update check: GitHub's API names the latest release. The API, not the
+ * releases page, because the page's headers do not fit the HTTP parser. */
+
+#define UPDATE_HOST "api.github.com"
+#define RELEASES_URL "github.com/OPerepadia/PalmView/releases"
+
+static Boolean UpdateValue(void *contextP, const JsonScanner *scannerP,
+                           UInt16 type, const Char *textP, UInt16 length)
+{
+    AppState *s = (AppState *)contextP;
+    if (type == jsonTypeString && JsonPathIs(scannerP, "tag_name"))
+        StrNCopy(s->location, textP, sizeof(s->location) - 1);
+    return true;
+}
+
+static void GetAppVersion(Char *dstP, UInt16 capacity)
+{
+    MemHandle versionH = DmGetResource('tver', AppVersionString);
+    dstP[0] = '\0';
+    if (versionH == 0) return;
+    Append(dstP, capacity, (const Char *)MemHandleLock(versionH));
+    MemHandleUnlock(versionH);
+    DmReleaseResource(versionH);
+}
+
+static void StartUpdateCheck(AppState *s)
+{
+    NetJobConfig config;
+    Char version[16], message[48];
+    UInt16 length = 0;
+    Err error;
+    StopThumbs(s);
+    if (s->task != taskIdle) return;
+    if ((error = EnsureNetwork(s)) != errNone) {
+        message[0] = '\0';
+        Append(message, sizeof(message), "Wi-Fi unavailable, error ");
+        AppendHex(message, sizeof(message), (UInt16)error);
+        SetStatus(s, message);
+        return;
+    }
+    GetAppVersion(version, sizeof(version));
+    TextAppend(s->request, sizeof(s->request), &length,
+        "GET /repos/OPerepadia/PalmView/releases/latest HTTP/1.1\r\nHost: "
+        UPDATE_HOST "\r\nUser-Agent: PalmView/");
+    TextAppend(s->request, sizeof(s->request), &length, version);
+    TextAppend(s->request, sizeof(s->request), &length,
+        "\r\nAccept: application/vnd.github+json\r\n"
+        "Accept-Encoding: identity\r\nConnection: close\r\n\r\n");
+    config = s->netConfig;
+    config.trustP = s->updateTrustP;
+    config.trustLength = MemHandleSize(s->updateTrustH);
+    MemSet(s->location, sizeof(s->location), 0);
+    JsonScanInit(&s->scanner, s->jsonValue, sizeof(s->jsonValue),
+        UpdateValue, 0, s);
+    StrCopy(s->host, UPDATE_HOST);
+    if (!NetJobStart(&s->jobP, &config, s->host, s->request, length,
+            FeedJson, s, &s->jobResult)) {
+        SetStatus(s, "Out of memory.");
+        return;
+    }
+    s->task = taskUpdate;
+    SetStatus(s, "Checking for updates...");
+}
+
+static void FinishUpdateCheck(AppState *s)
+{
+    Char version[16], message[128];
+    const Char *tagP = s->location[0] == 'v' ? s->location + 1 : s->location;
+    message[0] = '\0';
+    GetAppVersion(version, sizeof(version));
+    if (s->jobResult.status == netJobOk &&
+            JsonScanFinish(&s->scanner) == jsonOk && tagP[0] != '\0') {
+        Append(message, sizeof(message), "PalmView ");
+        if (TextCompareVersions(tagP, version) > 0) {
+            Append(message, sizeof(message), tagP);
+            Append(message, sizeof(message), " is available. Get it at "
+                RELEASES_URL ".");
+        } else {
+            Append(message, sizeof(message), version);
+            Append(message, sizeof(message), " is the latest version.");
+        }
+    } else {
+        Append(message, sizeof(message), "Could not check for updates: ");
+        if (s->jobResult.status == netJobOk)
+            Append(message, sizeof(message), "unexpected reply");
+        else
+            DescribeResult(&s->jobResult, false, message, sizeof(message));
+        Append(message, sizeof(message), ". See " RELEASES_URL ".");
+    }
+    SetStatus(s, "");
+    FrmCustomAlert(UpdateAlert, message, "", "");
+}
+
 /* Event loop glue */
 
 static void FinishJob(AppState *s)
@@ -853,6 +949,10 @@ static void FinishJob(AppState *s)
     } else if (task == taskDownload) {
         FinishChunk(s);
         RefreshDetail(s);
+    } else if (task == taskUpdate) {
+        s->task = taskIdle;
+        FinishUpdateCheck(s);
+        StartThumbs(s);
     } else if (task == taskThumbs) {
         ThumbsEnded(s);
     }
@@ -1272,6 +1372,10 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 FrmDeleteForm(aboutP);
                 return true;
             }
+            if (eventP->data.menu.itemID == MenuCheckUpdates) {
+                StartUpdateCheck(s);
+                return true;
+            }
             if (eventP->data.menu.itemID == MenuClearHistory) {
                 MemSet(s->prefs.history, sizeof(s->prefs.history), 0);
                 s->prefsChanged = true;
@@ -1356,6 +1460,10 @@ static void StopApplication(AppState *s)
     if (s->trustH != 0) {
         MemHandleUnlock(s->trustH);
         DmReleaseResource(s->trustH);
+    }
+    if (s->updateTrustH != 0) {
+        MemHandleUnlock(s->updateTrustH);
+        DmReleaseResource(s->updateTrustH);
     }
     UdpLogClose(s->logP);
     if (s->netOpen) NetLibClose(s->netRefNum, false);

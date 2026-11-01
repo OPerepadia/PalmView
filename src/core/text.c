@@ -324,6 +324,25 @@ Boolean TextParseUInt32(const Char *textP, UInt32 *valueP)
     return found;
 }
 
+static const Char *NextVersionPart(const Char *textP)
+{
+    while (*textP >= '0' && *textP <= '9') textP++;
+    return *textP == '.' ? textP + 1 : textP + StrLen(textP);
+}
+
+Int16 TextCompareVersions(const Char *aP, const Char *bP)
+{
+    while (*aP != '\0' || *bP != '\0') {
+        UInt32 a = 0, b = 0;
+        TextParseUInt32(aP, &a);
+        TextParseUInt32(bP, &b);
+        if (a != b) return a < b ? -1 : 1;
+        aP = NextVersionPart(aP);
+        bP = NextVersionPart(bP);
+    }
+    return 0;
+}
+
 void TextShorten(const Char *srcP, Char *dstP, UInt16 capacity)
 {
     static const Char kWords[] = "view\0\0second\0s\0minute\0min\0hour\0h\0"

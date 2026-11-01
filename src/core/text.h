@@ -45,6 +45,10 @@ Boolean TextAppendUInt32(Char *dstP, UInt16 capacity, UInt16 *lengthP,
 
 /* Parses leading decimal digits. Returns false if there are none. */
 Boolean TextParseUInt32(const Char *textP, UInt32 *valueP);
+/* Compares dotted versions such as "0.10.2" part by part: negative, 0 or
+ * positive. Missing parts count as 0, and anything after a part that is
+ * not a dot is ignored. */
+Int16 TextCompareVersions(const Char *aP, const Char *bP);
 
 /* Shortens YouTube's view counts and ages: "1.8B views" becomes "1.8B",
  * "10 years ago" and "Streamed 10 years ago" become "10y ago". Other text,

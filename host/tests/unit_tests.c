@@ -174,6 +174,17 @@ static void TestShorten(void)
     ExpectText("shorten truncated", out, "10y");
 }
 
+static void TestVersions(void)
+{
+    Expect("same version", TextCompareVersions("0.1.0", "0.1.0") == 0);
+    Expect("newer minor", TextCompareVersions("0.2.0", "0.1.9") > 0);
+    Expect("older patch", TextCompareVersions("0.1.0", "0.1.1") < 0);
+    Expect("numbers, not text", TextCompareVersions("0.10.0", "0.9.0") > 0);
+    Expect("missing part is 0", TextCompareVersions("1.0", "1.0.0") == 0);
+    Expect("extra part", TextCompareVersions("1.0.1", "1.0") > 0);
+    Expect("suffix ignored", TextCompareVersions("1.2-beta", "1.2") == 0);
+}
+
 static void TestClientParse(void)
 {
     YtClient client;
@@ -423,6 +434,7 @@ int main(void)
     TestFileName();
     TestJapanese();
     TestShorten();
+    TestVersions();
     TestClientParse();
     TestUrls();
     TestRedirects();

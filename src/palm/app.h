@@ -52,6 +52,7 @@ typedef enum Task {
     taskSearch,
     taskPlayer,
     taskDownload,
+    taskUpdate,
     taskThumbs          /* in the background: anything else stops it */
 } Task;
 
@@ -92,6 +93,8 @@ typedef struct AppState {
     UInt16 netRefNum;
     Boolean netOpen;
     MemHandle trustH;
+    MemHandle updateTrustH;     /* github.com's issuers */
+    const UInt8 *updateTrustP;
     TextCodec codec;            /* how the Palm shows text */
     MemHandle jisH;             /* its Japanese table, with CJKOS */
     NetJobConfig netConfig;

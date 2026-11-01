@@ -31,8 +31,9 @@
   converts frames, `sound.c` holds the PCM ring and callback.
 - `src/bench/`: PalmView Bench.
 - `host/`: the `pview` tool, a Palm OS shim and tests.
-- `certs/google.pem`: the Google Trust Services issuers the app trusts.
-  Refresh with `tools/update-certs.sh`.
+- `certs/`: the issuers the app trusts. `google.pem` has Google Trust
+  Services' for YouTube, `github.pem` has Sectigo's for the update check on
+  api.github.com. Refresh both with `tools/update-certs.sh`.
 
 ## Playback
 

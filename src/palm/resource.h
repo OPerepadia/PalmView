@@ -30,6 +30,7 @@
 #define MenuAbout 1201
 #define MenuResetVisitor 1202
 #define MenuClearHistory 1203
+#define MenuCheckUpdates 1204
 
 #define SavedForm 1400
 #define SavedGadget 1401
@@ -66,8 +67,10 @@
 #define RomIncompatibleAlert 1302
 #define DeleteVideoAlert 1303
 #define DeleteFailedAlert 1304
+#define UpdateAlert 1305
 
 #define TrustCertificates 1000
+#define UpdateCertificates 1001
 #define JisTable 1000
 #define AppIcon 1000
 #define AppVersionString 1000

@@ -222,7 +222,7 @@ $(BUILD_DIR)/about-hd.bmp: src/palm/icon.svg | $(BUILD_DIR)
 	$(MAGICK) -background none -density 326 RSVG:$< $(call ABOUT_CROP,72x72) $(ICON_EDGE) BMP3:$@
 
 $(PRC): $(CODE) $(CODE2) $(RELOCS) $(ICONS) $(BUILD_DIR)/jis.bin \
-		$(RESOURCE_RCP) src/palm/resource.h certs/google.pem app.mk
+		$(RESOURCE_RCP) src/palm/resource.h certs/google.pem certs/github.pem app.mk
 	cd $(BUILD_DIR) && $(PILRC) -ro -o $(BASE_RO) -creator $(APP_CREATOR) \
 		-type $(APP_TYPE) -name '$(APP_NAME)' -I $(ROOT)/src/palm $(RESOURCE_RCP)
 	$(BUILD_PRC) --no-check -o $(PRC) -n '$(APP_NAME)' -c $(APP_CREATOR) \
