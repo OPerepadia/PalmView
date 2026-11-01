@@ -71,9 +71,9 @@ play. Its design comes from how the TX's network behaves:
   full 200 KB/s makes too many frames late, so a response is read a little
   faster than the video plays.
 - **ChaCha20-Poly1305.** With PalmTLS 0.1.2's AES-GCM, each 16 KB record
-  takes about 100 ms to decrypt, and video drops to half rate. The fork's
-  native ChaCha20-Poly1305 brings the network down to about 3% of each
-  second at 144p. PalmTLS lists it first, and YouTube's servers choose it.
+  takes about 100 ms to decrypt, and video drops to half rate. The native
+  ChaCha20-Poly1305 in PalmTLS 0.1.3 brings the network down to about 3% of
+  each second at 144p. PalmTLS lists it first, and YouTube's servers choose it.
 - **Never waiting.** Sockets stay non-blocking, and a socket is only read
   when it has data.
 

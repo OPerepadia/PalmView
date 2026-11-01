@@ -9,7 +9,7 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd -P)"
 deps="$root/deps"
 sdk_commit=1fa2206
-palm_tls_commit=545bc3f
+palm_tls_commit=dbc4034
 tjpgd_sha256=052fe3efbc9a8be29f31597ad009c5b51a4f6905878eb28569e0ab3d46d0c013
 toolchain="${PALM_TOOLCHAIN_ROOT:-$deps/palm-toolchain}"
 
@@ -36,7 +36,7 @@ if [[ ! -d "$deps/palm-os-sdk/.git" ]]; then
   git -C "$deps/palm-os-sdk" sparse-checkout set sdk-5r4 PalmOne
 fi
 git -C "$deps/palm-os-sdk" checkout -q --detach "$sdk_commit"
-clone_at https://github.com/OPerepadia/palm-tls.git "$deps/palm-tls" "$palm_tls_commit"
+clone_at https://github.com/palmsnipe/palm-tls.git "$deps/palm-tls" "$palm_tls_commit"
 if [[ ! -f "$deps/tjpgd/src/tjpgd.c" ]]; then
   curl -fsSL --retry 3 -o "$deps/tjpgd3.zip" https://elm-chan.org/fsw/tjpgd/arc/tjpgd3.zip
   echo "$tjpgd_sha256  $deps/tjpgd3.zip" | sha256sum -c --quiet

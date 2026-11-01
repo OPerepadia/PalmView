@@ -60,7 +60,7 @@ During playback:
 
 - **API.** PalmView identifies itself as the YouTube app for visionOS. YouTube provides this client with direct stream URLs, eliminating the need to run JavaScript on the Palm.
 - **HTTPS.** YouTube only works over HTTPS with modern TLS, which Palm OS lacks. [PalmTLS](https://github.com/palmsnipe/palm-tls) brings it to Palm OS (many thanks to its author).
-  PalmView uses [a fork](https://github.com/OPerepadia/palm-tls/tree/chacha20-poly1305) that adds native ARM ChaCha20-Poly1305 for faster decryption.
+  Use PalmTLS 0.1.3 or later. Its native ARM ChaCha20-Poly1305 decrypts fast enough for video.
 - **Streaming.** YouTube serves video and sound as separate streams. Both streams are buffered in RAM and played as they arrive. Nothing is written to the SD card during streaming.
 - **Decoding.** Palm OS 5 runs regular apps in a 68K emulator, which is too slow for video. H.264 and AAC are decoded in native ARM code with FFmpeg's decoders.
   Frames go straight to screen memory, timed to the sound.
