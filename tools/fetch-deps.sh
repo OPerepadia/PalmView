@@ -9,7 +9,7 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd -P)"
 deps="$root/deps"
 sdk_commit=1fa2206
-palm_tls_commit=dbc4034
+palm_tls_commit=629ff27
 tjpgd_sha256=052fe3efbc9a8be29f31597ad009c5b51a4f6905878eb28569e0ab3d46d0c013
 toolchain="${PALM_TOOLCHAIN_ROOT:-$deps/palm-toolchain}"
 
