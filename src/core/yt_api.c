@@ -302,6 +302,7 @@ static void ResetCurrentFormat(YtPlayer *p)
     p->curIndexEnd = 0;
     p->curHasUrl = false;
     p->curUnusable = false;
+    p->curDefault = false;
 }
 
 void YtPlayerInit(YtPlayer *playerP, const UInt16 *videoItagsP,
@@ -332,8 +333,8 @@ static Boolean InFormat(const JsonScanner *s)
 }
 
 /* A value of the adaptive format being read */
-static void FormatValue(YtPlayer *p, const JsonScanner *s, const Char *textP,
-                        UInt16 length)
+static void FormatValue(YtPlayer *p, const JsonScanner *s, UInt16 type,
+                        const Char *textP, UInt16 length)
 {
     if (JsonPathFrom(s, 3, "itag")) {
         UInt32 itag = 0;
@@ -353,6 +354,8 @@ static void FormatValue(YtPlayer *p, const JsonScanner *s, const Char *textP,
     } else if (JsonPathFrom(s, 3, "signatureCipher") ||
                JsonPathFrom(s, 3, "drmFamilies/#")) {
         p->curUnusable = true;
+    } else if (JsonPathFrom(s, 3, "audioTrack/audioIsDefault")) {
+        p->curDefault = type == jsonTypeTrue;
     } else if (JsonPathFrom(s, 3, "type")) {
         /* OTF streams are only served in numbered segments. */
         if (StringIs(textP, "FORMAT_STREAM_TYPE_OTF")) p->curUnusable = true;
@@ -364,7 +367,7 @@ Boolean YtPlayerValue(void *contextP, const JsonScanner *s, UInt16 type,
 {
     YtPlayer *p = (YtPlayer *)contextP;
     if (InFormat(s)) {
-        FormatValue(p, s, textP, length);
+        FormatValue(p, s, type, textP, length);
     } else if (JsonPathIs(s, "playabilityStatus/status")) {
         CopyField(p->status, sizeof(p->status), textP);
     } else if (JsonPathIs(s, "playabilityStatus/reason")) {
@@ -382,6 +385,14 @@ Boolean YtPlayerValue(void *contextP, const JsonScanner *s, UInt16 type,
             MemMove(p->visitor, textP, length + 1);
     }
     return true;
+}
+
+/* The default (original) language wins over itag preference. */
+static Boolean BetterAudio(const YtPlayer *p, UInt16 rank)
+{
+    if (!p->audio.found) return true;
+    if (p->curDefault != p->audioDefault) return p->curDefault;
+    return rank < p->audioRank;
 }
 
 static void TakeFormat(YtFormat *formatP, const YtPlayer *p)
@@ -404,8 +415,9 @@ Boolean YtPlayerEnd(void *contextP, const JsonScanner *s)
         for (i = 0; i < YT_VIDEO_CHOICES; i++)
             if (p->curItag == p->videoItags[i] && !p->video[i].found)
                 TakeFormat(&p->video[i], p);
-        if (ItagRank(p->audioItags, p->curItag, &rank) && rank < p->audioRank) {
+        if (ItagRank(p->audioItags, p->curItag, &rank) && BetterAudio(p, rank)) {
             p->audioRank = rank;
+            p->audioDefault = p->curDefault;
             TakeFormat(&p->audio, p);
         }
     }

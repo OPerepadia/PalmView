@@ -336,6 +336,44 @@ static void TestPlayerFormats(void)
     Expect("missing choice falls back", YtPlayerVideo(&player, 1) == &player.video[0]);
 }
 
+static void ParsePlayer(YtPlayer *playerP, const char *jsonP)
+{
+    static const UInt16 kVideo[] = { 160, 133, 0 }, kAudio[] = { 140, 139, 0 };
+    static Char value[YT_JSON_VALUE_CAPACITY];
+    JsonScanner scanner;
+    YtPlayerInit(playerP, kVideo, kAudio, &kWestern);
+    JsonScanInit(&scanner, value, sizeof(value), YtPlayerValue, YtPlayerEnd, playerP);
+    JsonScanFeed(&scanner, (const UInt8 *)jsonP, (UInt16)strlen(jsonP));
+    Expect("audio tracks parsed", JsonScanFinish(&scanner) == jsonOk);
+}
+
+/* The default track of a dubbed video wins, wherever it is listed. */
+static void TestAudioTracks(void)
+{
+    static YtPlayer player;
+    ParsePlayer(&player, "{\"streamingData\":{\"adaptiveFormats\":["
+        "{\"itag\":140,\"url\":\"https://a/de\",\"contentLength\":\"10\","
+        "\"audioTrack\":{\"id\":\"de-DE.10\",\"audioIsDefault\":false}},"
+        "{\"itag\":139,\"url\":\"https://a/en139\",\"contentLength\":\"11\","
+        "\"audioTrack\":{\"id\":\"en-US.4\",\"audioIsDefault\":true}},"
+        "{\"itag\":140,\"url\":\"https://a/en\",\"contentLength\":\"12\","
+        "\"audioTrack\":{\"id\":\"en-US.4\",\"audioIsDefault\":true}},"
+        "{\"itag\":140,\"url\":\"https://a/fr\",\"contentLength\":\"13\","
+        "\"audioTrack\":{\"id\":\"fr-FR.10\",\"audioIsDefault\":false}}]}}");
+    ExpectText("default track, preferred itag", player.audio.url, "https://a/en");
+    ParsePlayer(&player, "{\"streamingData\":{\"adaptiveFormats\":["
+        "{\"itag\":140,\"url\":\"https://a/de\",\"contentLength\":\"10\","
+        "\"audioTrack\":{\"id\":\"de-DE.10\",\"audioIsDefault\":false}},"
+        "{\"itag\":139,\"url\":\"https://a/en139\",\"contentLength\":\"11\","
+        "\"audioTrack\":{\"id\":\"en-US.4\",\"audioIsDefault\":true}}]}}");
+    ExpectText("default track over a better itag", player.audio.url, "https://a/en139");
+    ParsePlayer(&player, "{\"streamingData\":{\"adaptiveFormats\":["
+        "{\"itag\":139,\"url\":\"https://a/139\",\"contentLength\":\"10\"},"
+        "{\"itag\":140,\"url\":\"https://a/140\",\"contentLength\":\"11\"},"
+        "{\"itag\":140,\"url\":\"https://a/140b\",\"contentLength\":\"12\"}]}}");
+    ExpectText("one language: first preferred itag", player.audio.url, "https://a/140");
+}
+
 /* Sum of channel differences between RGB565 pixels and 8-bit RGB */
 static long Difference(const UInt16 *pixelsP, const UInt8 *rgbP, long count)
 {
@@ -440,6 +478,7 @@ int main(void)
     TestRedirects();
     TestApiRequests();
     TestPlayerFormats();
+    TestAudioTracks();
     TestThumbnails();
     TestThumbBadge();
     if (gFailures != 0) {

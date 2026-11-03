@@ -93,6 +93,7 @@ typedef struct YtPlayer {
     UInt16 videoItags[YT_VIDEO_CHOICES];
     UInt16 audioItags[YT_MAX_ITAG_CHOICES];
     UInt16 audioRank;
+    Boolean audioDefault;
     YtFormat video[YT_VIDEO_CHOICES];   /* by videoItags; found if offered */
     YtFormat audio;
     /* The adaptive format being read. */
@@ -101,13 +102,15 @@ typedef struct YtPlayer {
     UInt32 curIndexEnd;
     Boolean curHasUrl;
     Boolean curUnusable;
+    Boolean curDefault;     /* audioTrack is the default language */
     Char curUrl[YT_URL_CAPACITY];
     const TextCodec *codecP;    /* for the text above */
 } YtPlayer;
 
 /* Itag lists end with 0. Each video itag, up to YT_VIDEO_CHOICES, gets
- * its slot in video[]; audio itags are in order of preference. Text is
- * stored in codecP, or Western when it is 0. */
+ * its slot in video[]; audio itags are in order of preference; with several
+ * languages, the default track comes first. Text is stored in codecP, or
+ * Western when it is 0. */
 void YtPlayerInit(YtPlayer *playerP, const UInt16 *videoItagsP,
                   const UInt16 *audioItagsP, const TextCodec *codecP);
 Boolean YtPlayerValue(void *contextP, const JsonScanner *scannerP,
