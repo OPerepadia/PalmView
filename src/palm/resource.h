@@ -11,6 +11,9 @@
 #define ResultScrollBar 1008
 #define MainScreenTrigger 1009
 #define MainScreenList 1010
+#define PagePrevButton 1011
+#define PageNextButton 1012
+#define PageGadget 1013
 
 #define DetailForm 1100
 #define InfoField 1101

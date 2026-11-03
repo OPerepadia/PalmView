@@ -31,6 +31,9 @@
 /* Where the list starts, and what the status line below it takes */
 #define RESULT_TOP 31
 #define RESULT_BOTTOM 14
+/* The status line's width, and what the page selector leaves of it */
+#define STATUS_WIDTH 140
+#define STATUS_PAGER_WIDTH 90
 
 
 
@@ -114,11 +117,72 @@ void SetFieldText(UInt16 fieldId, Char *textP)
     FldDrawField(fieldP);
 }
 
+static void DrawPageNumber(const AppState *s)
+{
+    FormType *formP = FrmGetActiveForm();
+    RectangleType bounds;
+    Char number[12];
+    FontID font = FntSetFont(stdFont);
+    Coord width;
+    FrmGetObjectBounds(formP, FrmGetObjectIndex(formP, PageGadget), &bounds);
+    StrCopy(number, "Page ");
+    AppendNumber(number, sizeof(number), s->page + 1);
+    width = FntCharsWidth(number, (Int16)StrLen(number));
+    WinEraseRectangle(&bounds, 0);
+    WinDrawChars(number, (Int16)StrLen(number),
+        bounds.topLeft.x + (bounds.extent.x - width) / 2, bounds.topLeft.y);
+    FntSetFont(font);
+}
+
+/* The page selector at the end of the status line, while the results have
+ * other pages. Kept tokens mean they do, even while page 1 reloads. A
+ * message too long to share the line hides it until the next tap or key. */
+static void ShowPager(AppState *s)
+{
+    static const Char kPrev[] = "\002", kPrevOff[] = "\005";
+    static const Char kNext[] = "\003", kNextOff[] = "\006";
+    FieldType *fieldP = (FieldType *)GetObject(StatusField);
+    ControlType *prevP = (ControlType *)GetObject(PagePrevButton);
+    ControlType *nextP = (ControlType *)GetObject(PageNextButton);
+    Boolean hasPrev = s->page != 0, hasNext = s->searchP->next[0] != '\0';
+    Boolean visible = (hasPrev || hasNext || s->tokensH != 0) &&
+        !s->pagerHidden;
+    RectangleType bounds;
+    FldGetBounds(fieldP, &bounds);
+    if (!visible) {
+        ShowObject(PagePrevButton, false);
+        ShowObject(PageGadget, false);
+        ShowObject(PageNextButton, false);
+    }
+    if (bounds.extent.x != (visible ? STATUS_PAGER_WIDTH : STATUS_WIDTH)) {
+        FldEraseField(fieldP);
+        bounds.extent.x = visible ? STATUS_PAGER_WIDTH : STATUS_WIDTH;
+        FldSetBounds(fieldP, &bounds);
+        FldDrawField(fieldP);
+    }
+    if (!visible) return;
+    CtlSetLabel(prevP, hasPrev ? kPrev : kPrevOff);
+    CtlSetEnabled(prevP, hasPrev);
+    CtlSetLabel(nextP, hasNext ? kNext : kNextOff);
+    CtlSetEnabled(nextP, hasNext);
+    ShowObject(PagePrevButton, true);
+    ShowObject(PageGadget, true);
+    ShowObject(PageNextButton, true);
+    DrawPageNumber(s);
+}
+
 static void SetStatus(AppState *s, const Char *textP)
 {
+    FontID font;
     StrNCopy(s->status, textP, sizeof(s->status) - 1);
     s->status[sizeof(s->status) - 1] = '\0';
-    if (OnForm(MainForm)) SetFieldText(StatusField, s->status);
+    if (!OnForm(MainForm)) return;
+    font = FntSetFont(stdFont);
+    s->pagerHidden = FntCharsWidth(s->status, (Int16)StrLen(s->status)) >
+        STATUS_PAGER_WIDTH;
+    FntSetFont(font);
+    ShowPager(s);
+    SetFieldText(StatusField, s->status);
 }
 
 void SetProgressText(AppState *s, const Char *textP)
@@ -617,6 +681,75 @@ static void OpenResult(AppState *s, UInt16 item)
     FrmPopupForm(DetailForm);
 }
 
+/* Pages of results. The first comes from the query, each later one from
+ * a token the page before it gave. */
+
+/* Keeps the first count tokens and adds tokenP after them. */
+static Boolean KeepTokens(AppState *s, UInt16 count, const Char *tokenP)
+{
+    UInt32 offset = 0, length = StrLen(tokenP) + 1;
+    Char *tokensP;
+    if (s->tokensH == 0) {
+        s->tokensH = MemHandleNew(length);
+        if (s->tokensH == 0) return false;
+    } else {
+        tokensP = (Char *)MemHandleLock(s->tokensH);
+        while (count-- > 0) offset += StrLen(tokensP + offset) + 1;
+        MemHandleUnlock(s->tokensH);
+        if (MemHandleResize(s->tokensH, offset + length) != errNone)
+            return false;
+    }
+    tokensP = (Char *)MemHandleLock(s->tokensH);
+    MemMove(tokensP + offset, tokenP, (Int32)length);
+    MemHandleUnlock(s->tokensH);
+    return true;
+}
+
+/* Loads a page of the results, 0 being the first. */
+static void LoadPage(AppState *s, UInt16 page)
+{
+    UInt16 length;
+    StopThumbs(s);
+    if (s->task != taskIdle) return;
+    if (page == 0) {
+        length = YtBuildSearchRequest(&s->client, s->prefs.visitor, s->query,
+            &s->codec, s->body, s->request, sizeof(s->request));
+    } else {
+        const Char *tokenP = (const Char *)MemHandleLock(s->tokensH);
+        UInt16 i;
+        for (i = 1; i < page; i++) tokenP += StrLen(tokenP) + 1;
+        length = YtBuildContinuationRequest(&s->client, s->prefs.visitor,
+            tokenP, s->body, s->request, sizeof(s->request));
+        MemHandleUnlock(s->tokensH);
+    }
+    FreeThumbs(s);
+    YtSearchInit(s->searchP, &s->codec);
+    s->page = page;
+    s->resultTop = 0;
+    if (s->resultFocus != NO_RESULT) s->resultFocus = 0;
+    JsonScanInit(&s->scanner, s->jsonValue, sizeof(s->jsonValue),
+        YtSearchValue, YtSearchEnd, s->searchP);
+    SetStatus(s, "Loading...");
+    StartApiJob(s, taskSearch, length);
+    ShowResults(s, true);
+}
+
+static void NextPage(AppState *s)
+{
+    StopThumbs(s);
+    if (s->task != taskIdle || s->searchP->next[0] == '\0') return;
+    if (!KeepTokens(s, s->page, s->searchP->next)) {
+        SetStatus(s, "Out of memory.");
+        return;
+    }
+    LoadPage(s, s->page + 1);
+}
+
+static void PreviousPage(AppState *s)
+{
+    if (s->page != 0) LoadPage(s, s->page - 1);
+}
+
 /* The result at a screen point, or NO_RESULT */
 static UInt16 ResultAt(const AppState *s, const RectangleType *boundsP,
                        Coord x, Coord y)
@@ -664,6 +797,21 @@ static Boolean ResultGadgetHandler(FormGadgetTypeInCallback *gadgetP,
             ((EventType *)paramP)->eType == frmGadgetEnterEvent) {
         TrackResultPen(s, ((EventType *)paramP)->screenX,
             ((EventType *)paramP)->screenY);
+        return true;
+    }
+    return false;
+}
+
+static Boolean PageGadgetHandler(FormGadgetTypeInCallback *gadgetP,
+                                 UInt16 cmd, void *paramP)
+{
+    (void)paramP;
+    if (cmd == formGadgetDrawCmd) {
+        DrawPageNumber((AppState *)gadgetP->data);
+        return true;
+    }
+    if (cmd == formGadgetEraseCmd) {
+        WinEraseRectangle(&gadgetP->rect, 0);
         return true;
     }
     return false;
@@ -728,10 +876,11 @@ void LayoutMainForm(AppState *s)
 {
     FormType *formP = FrmGetActiveForm();
     RectangleType bounds;
-    Coord width, height, listHeight;
+    Coord width, height, listHeight, statusY;
     UInt16 i;
     if (!HasInputArea()) return;
     WinGetDisplayExtent(&width, &height);
+    statusY = height - RESULT_BOTTOM + 1;
     RctSetRectangle(&bounds, 0, 0, width, height);
     WinSetBounds(FrmGetWindowHandle(formP), &bounds);
     FitResultRows(height - RESULT_TOP - RESULT_BOTTOM, &s->resultRows,
@@ -739,13 +888,15 @@ void LayoutMainForm(AppState *s)
     listHeight = s->resultRowHeight * (Coord)s->resultRows;
     SetObjectY(formP, FrmGetObjectIndex(formP, ResultGadget), RESULT_TOP, listHeight);
     SetObjectY(formP, FrmGetObjectIndex(formP, ResultScrollBar), RESULT_TOP, listHeight);
-    SetObjectY(formP, FrmGetObjectIndex(formP, StatusField),
-        height - RESULT_BOTTOM, 0);
+    SetObjectY(formP, FrmGetObjectIndex(formP, StatusField), statusY, 0);
+    SetObjectY(formP, FrmGetObjectIndex(formP, PagePrevButton), statusY, 0);
+    SetObjectY(formP, FrmGetObjectIndex(formP, PageGadget), statusY, 0);
+    SetObjectY(formP, FrmGetObjectIndex(formP, PageNextButton), statusY, 0);
     for (i = 0; i < FrmGetNumberOfObjects(formP); i++)
         if (FrmGetObjectType(formP, i) == frmGraffitiStateObj) {
             Coord x, y;
             FrmGetObjectPosition(formP, i, &x, &y);
-            FrmSetObjectPosition(formP, i, x, height - RESULT_BOTTOM + 1);
+            FrmSetObjectPosition(formP, i, x, statusY);
         }
     ShowResults(s, false);
 }
@@ -759,6 +910,9 @@ static void InitMainForm(AppState *s)
         UInt16 index = FrmGetObjectIndex(formP, ResultGadget);
         FrmSetGadgetData(formP, index, s);
         FrmSetGadgetHandler(formP, index, ResultGadgetHandler);
+        index = FrmGetObjectIndex(formP, PageGadget);
+        FrmSetGadgetData(formP, index, s);
+        FrmSetGadgetHandler(formP, index, PageGadgetHandler);
     }
     LstSetSelection((ListType *)GetObject(MainScreenList), screenHome);
     ShowResults(s, false);
@@ -805,39 +959,36 @@ static void StartSearch(AppState *s)
     StopThumbs(s);
     if (s->task != taskIdle || queryP == 0 || queryP[0] == '\0') return;
     RememberSearch(s, queryP);
-    FreeThumbs(s);
-    YtSearchInit(s->searchP, &s->codec);
-    s->resultTop = 0;
+    StrNCopy(s->query, queryP, sizeof(s->query) - 1);
+    s->query[sizeof(s->query) - 1] = '\0';
+    if (s->tokensH != 0) MemHandleFree(s->tokensH);
+    s->tokensH = 0;
     s->resultFocus = NO_RESULT;
-    ShowResults(s, true);
-    JsonScanInit(&s->scanner, s->jsonValue, sizeof(s->jsonValue),
-        YtSearchValue, YtSearchEnd, s->searchP);
-    SetStatus(s, "Searching...");
-    StartApiJob(s, taskSearch, YtBuildSearchRequest(&s->client,
-        s->prefs.visitor, queryP, &s->codec, s->body, s->request,
-        sizeof(s->request)));
+    LoadPage(s, 0);
 }
 
 static void FinishSearch(AppState *s)
 {
     Char message[80];
-    if (s->jobResult.status != netJobOk ||
-        JsonScanFinish(&s->scanner) != jsonOk) {
-        if (s->jobResult.status == netJobOk)
-            StrCopy(message, "Unexpected reply from YouTube.");
-        else
-            DescribeFailure(s, message, sizeof(message));
-        SetStatus(s, message);
-        return;
-    }
-    SaveVisitor(s, s->searchP->visitor);
+    Boolean ok = s->jobResult.status == netJobOk &&
+        JsonScanFinish(&s->scanner) == jsonOk;
     message[0] = '\0';
-    AppendNumber(message, sizeof(message), s->searchP->count);
-    Append(message, sizeof(message), " results in ");
-    AppendSeconds(message, sizeof(message), TimGetTicks() - s->taskStartTicks);
-    SetStatus(s, s->searchP->count == 0 ? "No results." : message);
+    if (!ok && s->jobResult.status == netJobOk) {
+        StrCopy(message, "Unexpected reply from YouTube.");
+    } else if (!ok) {
+        DescribeFailure(s, message, sizeof(message));
+    } else if (s->searchP->count == 0) {
+        StrCopy(message, s->page == 0 ? "No results." : "No more results.");
+    } else {
+        AppendNumber(message, sizeof(message), s->searchP->count);
+        Append(message, sizeof(message), " results in ");
+        AppendSeconds(message, sizeof(message),
+            TimGetTicks() - s->taskStartTicks);
+    }
+    if (ok) SaveVisitor(s, s->searchP->visitor);
+    SetStatus(s, message);
     if (OnForm(MainForm)) ShowResults(s, true);
-    StartThumbs(s);
+    if (ok) StartThumbs(s);
 }
 
 /* Update check: GitHub's API names the latest release. The API, not the
@@ -1177,6 +1328,8 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
         case ctlSelectEvent:
             switch (eventP->data.ctlSelect.controlID) {
                 case SearchButton: StartSearch(s); return true;
+                case PagePrevButton: PreviousPage(s); return true;
+                case PageNextButton: NextPage(s); return true;
                 case DownloadButton: StartDownload(s); return true;
                 case CancelButton: CancelJob(s); return true;
                 case BackButton: ReturnToMain(s); return true;
@@ -1241,6 +1394,10 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 return true;
             break;
         case penDownEvent:
+            if (OnForm(MainForm) && s->pagerHidden) {
+                s->pagerHidden = false;
+                ShowPager(s);
+            }
             if (IsTitleForm()) ReleaseTitlePicker(s);
             if (OnForm(PlayForm) && s->playbackP != 0) {
                 RectangleType bounds;
@@ -1279,6 +1436,10 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
             }
             break;
         case keyDownEvent:
+            if (OnForm(MainForm) && s->pagerHidden) {
+                s->pagerHidden = false;
+                ShowPager(s);
+            }
             if (IsTitleForm()) {
                 if (TitlePickerFocused()) return HandleTitleKey(s, eventP);
                 /* The second half of the press that just left the picker */
@@ -1312,6 +1473,21 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                             s->resultFocus != NO_RESULT)
                         OpenResult(s, s->resultFocus);
                     s->lastCentre = now;
+                    return true;
+                }
+                if (s->resultFocus != NO_RESULT && (c == vchrRockerLeft ||
+                        c == vchrRockerRight ||
+                        NavPressed(eventP, navBitLeft, navChangeLeft) ||
+                        NavPressed(eventP, navBitRight, navChangeRight))) {
+                    UInt32 now = TimGetTicks();
+                    if (now - s->lastSkip >= SysTicksPerSecond() / 4) {
+                        if (c == vchrRockerLeft ||
+                                NavPressed(eventP, navBitLeft, navChangeLeft))
+                            PreviousPage(s);
+                        else
+                            NextPage(s);
+                    }
+                    s->lastSkip = now;
                     return true;
                 }
             }
@@ -1470,6 +1646,7 @@ static void StopApplication(AppState *s)
     CloseTlsLibrary(s);
     if (s->searchTextH != 0) MemHandleFree(s->searchTextH);
     if (s->searchP != 0) MemPtrFree(s->searchP);
+    if (s->tokensH != 0) MemHandleFree(s->tokensH);
     if (s->playerP != 0) MemPtrFree(s->playerP);
 }
 

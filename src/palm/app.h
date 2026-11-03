@@ -102,6 +102,10 @@ typedef struct AppState {
     YtClient client;
     AppPrefs prefs;
     YtSearch *searchP;
+    Char query[HISTORY_CAPACITY];   /* the search the pages are of */
+    UInt16 page;                /* of results shown, 0 for the first */
+    MemHandle tokensH;          /* tokens of pages 1 to page, joined by '\0' */
+    Boolean pagerHidden;        /* for a status message that needs the room */
     YtPlayer *playerP;
     UInt16 selected;
     UInt16 resultTop;           /* result in the first row */

@@ -3,7 +3,7 @@
 /* Host test client. It sends the same request bytes as the Palm app and
  * parses the replies with the same code; only the TLS transport differs.
  *
- *   pview search QUERY
+ *   pview search QUERY [PAGES]       PAGES pages of results, default 1
  *   pview info VIDEO_ID
  *   pview get VIDEO_ID OUT_DIR       download video and audio, then merge
  *   pview merge VIDEO AUDIO OUT      merge two downloaded streams
@@ -165,21 +165,32 @@ static Boolean ApiCall(const Char *requestP, UInt16 length,
     return true;
 }
 
-static int Search(const char *queryP)
+static int Search(const char *queryP, int pages)
 {
     static Char request[YT_REQUEST_CAPACITY], body[YT_BODY_CAPACITY];
+    static Char token[YT_CONTINUATION_CAPACITY];
     static YtSearch search;
-    UInt16 i;
-    YtSearchInit(&search, 0);
-    if (!ApiCall(request, YtBuildSearchRequest(&gClient, gVisitor, queryP, 0,
-            body, request, sizeof(request)), YtSearchValue, YtSearchEnd,
-            &search)) return 1;
-    SaveVisitor(search.visitor);
-    for (i = 0; i < search.count; i++) {
-        const YtSearchItem *itemP = &search.items[i];
-        printf("%s  %-8s %s\n             %s | %s | %s%s\n", itemP->videoId,
-            itemP->length, itemP->title, itemP->channel, itemP->published,
-            itemP->views, itemP->live ? " | LIVE" : "");
+    UInt16 i, length;
+    int page;
+    for (page = 1; page <= pages; page++) {
+        YtSearchInit(&search, 0);
+        length = page == 1
+            ? YtBuildSearchRequest(&gClient, gVisitor, queryP, 0, body,
+                request, sizeof(request))
+            : YtBuildContinuationRequest(&gClient, gVisitor, token, body,
+                request, sizeof(request));
+        if (!ApiCall(request, length, YtSearchValue, YtSearchEnd, &search))
+            return 1;
+        SaveVisitor(search.visitor);
+        if (pages > 1) printf("-- page %d\n", page);
+        for (i = 0; i < search.count; i++) {
+            const YtSearchItem *itemP = &search.items[i];
+            printf("%s  %-8s %s\n             %s | %s | %s%s\n", itemP->videoId,
+                itemP->length, itemP->title, itemP->channel, itemP->published,
+                itemP->views, itemP->live ? " | LIVE" : "");
+        }
+        if (search.next[0] == '\0') break;
+        StrCopy(token, search.next);
     }
     return 0;
 }
@@ -330,12 +341,13 @@ int main(int argc, char **argv)
 {
     YtClientDefaults(&gClient);
     LoadVisitor();
-    if (argc == 3 && strcmp(argv[1], "search") == 0) return Search(argv[2]);
+    if ((argc == 3 || argc == 4) && strcmp(argv[1], "search") == 0)
+        return Search(argv[2], argc == 4 ? atoi(argv[3]) : 1);
     if (argc == 3 && strcmp(argv[1], "info") == 0) return Info(argv[2]);
     if (argc == 4 && strcmp(argv[1], "get") == 0) return Get(argv[2], argv[3]);
     if (argc == 5 && strcmp(argv[1], "merge") == 0)
         return Merge(argv[2], argv[3], argv[4]);
-    fprintf(stderr, "usage: pview search QUERY | info ID | get ID DIR | "
+    fprintf(stderr, "usage: pview search QUERY [PAGES] | info ID | get ID DIR | "
         "merge VIDEO AUDIO OUT\n");
     return 2;
 }

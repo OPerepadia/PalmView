@@ -284,6 +284,11 @@ static void TestApiRequests(void)
     Expect("player request with long visitor fits", length != 0 &&
         strstr(request, "X-Goog-Visitor-Id: VVVV") != 0 &&
         strstr(request, "\"videoId\":\"dQw4w9WgXcQ\"") != 0);
+    length = YtBuildContinuationRequest(&client, "", "EtsDEg%3D%3D", body,
+        request, sizeof(request));
+    Expect("continuation request", length != 0 &&
+        strncmp(request, "POST /youtubei/v1/search?", 25) == 0 &&
+        strstr(request, ",\"continuation\":\"EtsDEg%3D%3D\"}") != 0);
     Expect("player request too small buffer", YtBuildPlayerRequest(&client,
         visitor, "dQw4w9WgXcQ", body, request, 600) == 0);
     length = YtBuildThumbRequest(&client, "dQw4w9WgXcQ", true, request,
@@ -372,6 +377,41 @@ static void TestAudioTracks(void)
         "{\"itag\":140,\"url\":\"https://a/140\",\"contentLength\":\"11\"},"
         "{\"itag\":140,\"url\":\"https://a/140b\",\"contentLength\":\"12\"}]}}");
     ExpectText("one language: first preferred itag", player.audio.url, "https://a/140");
+}
+
+static void ParseSearch(YtSearch *searchP, const char *jsonP)
+{
+    static Char value[YT_JSON_VALUE_CAPACITY];
+    JsonScanner scanner;
+    YtSearchInit(searchP, &kWestern);
+    JsonScanInit(&scanner, value, sizeof(value), YtSearchValue, YtSearchEnd, searchP);
+    JsonScanFeed(&scanner, (const UInt8 *)jsonP, (UInt16)strlen(jsonP));
+    Expect("search page parsed", JsonScanFinish(&scanner) == jsonOk);
+}
+
+/* The first page and the ones after it keep the next page's token in
+ * different places. */
+static void TestSearchPages(void)
+{
+    static YtSearch search;
+    ParseSearch(&search, "{\"contents\":{\"sectionListRenderer\":{"
+        "\"contents\":[{\"itemSectionRenderer\":{\"contents\":["
+        "{\"compactVideoRenderer\":{\"videoId\":\"aaaaaaaaaaa\","
+        "\"lengthText\":{\"simpleText\":\"1:00\"}}}],"
+        "\"continuations\":[{\"nextContinuationData\":{\"continuation\":\"T2\"}}]}}],"
+        "\"continuations\":[{\"reloadContinuationData\":{\"continuation\":\"R\"}}]}}}");
+    Expect("first page", search.count == 1);
+    ExpectText("first page's next token", search.next, "T2");
+    ParseSearch(&search, "{\"continuationContents\":{\"itemSectionContinuation\":{"
+        "\"contents\":[{\"compactVideoRenderer\":{\"videoId\":\"bbbbbbbbbbb\","
+        "\"lengthText\":{\"simpleText\":\"2:00\"}}}],"
+        "\"continuations\":[{\"nextContinuationData\":{\"continuation\":\"T3\"}}]}}}");
+    Expect("later page", search.count == 1 &&
+        strcmp(search.items[0].videoId, "bbbbbbbbbbb") == 0);
+    ExpectText("later page's next token", search.next, "T3");
+    ParseSearch(&search, "{\"continuationContents\":{\"itemSectionContinuation\":{"
+        "\"contents\":[]}}}");
+    ExpectText("last page", search.next, "");
 }
 
 /* Sum of channel differences between RGB565 pixels and 8-bit RGB */
@@ -479,6 +519,7 @@ int main(void)
     TestApiRequests();
     TestPlayerFormats();
     TestAudioTracks();
+    TestSearchPages();
     TestThumbnails();
     TestThumbBadge();
     if (gFailures != 0) {

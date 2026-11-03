@@ -23,6 +23,7 @@
 #define YT_BODY_CAPACITY 1536
 #define YT_REQUEST_CAPACITY 2560
 #define YT_SEARCH_MAX 20
+#define YT_CONTINUATION_CAPACITY 1024
 #define YT_JSON_VALUE_CAPACITY YT_URL_CAPACITY
 #define YT_MAX_ITAG_CHOICES 4
 #define YT_VIDEO_CHOICES 2
@@ -55,6 +56,11 @@ UInt16 YtBuildPlayerRequest(const YtClient *clientP, const Char *visitorP,
 UInt16 YtBuildSearchRequest(const YtClient *clientP, const Char *visitorP,
                             const Char *queryP, const TextCodec *codecP,
                             Char *bodyP, Char *requestP, UInt16 capacity);
+/* The next page of a search, from the token in YtSearch's next. */
+UInt16 YtBuildContinuationRequest(const YtClient *clientP,
+                                  const Char *visitorP, const Char *tokenP,
+                                  Char *bodyP, Char *requestP,
+                                  UInt16 capacity);
 
 /* Splits an https URL into host and the start of its path. */
 Boolean YtSplitUrl(const Char *urlP, Char *hostP, UInt16 hostCapacity,
@@ -135,6 +141,7 @@ typedef struct YtSearch {
     Char visitor[YT_VISITOR_CAPACITY];
     YtSearchItem cur;
     YtSearchItem items[YT_SEARCH_MAX];
+    Char next[YT_CONTINUATION_CAPACITY];    /* the next page's token, or "" */
     const TextCodec *codecP;    /* for the text above */
 } YtSearch;
 

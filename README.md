@@ -33,6 +33,7 @@ Download the two files from the [latest release](https://github.com/OPerepadia/P
 
 1. Type a search query and tap **Search**.
 2. Select a video from the list by tapping it or pressing the 5-way centre button.
+    - For more results, tap the arrows at the bottom right, or press 5-way left and right while a video is highlighted.
 3. The **Video Details** screen opens. Select a quality at the top right, then choose:
     - **Play**: streams the video in a built-in player
     - **Download**: saves it to the SD card

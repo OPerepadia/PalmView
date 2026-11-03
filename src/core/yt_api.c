@@ -188,6 +188,21 @@ UInt16 YtBuildSearchRequest(const YtClient *clientP, const Char *visitorP,
         requestP, capacity);
 }
 
+UInt16 YtBuildContinuationRequest(const YtClient *clientP,
+                                  const Char *visitorP, const Char *tokenP,
+                                  Char *bodyP, Char *requestP,
+                                  UInt16 capacity)
+{
+    UInt16 bodyLength = 0;
+    if (!AppendContext(clientP, visitorP, bodyP, &bodyLength) ||
+        !AppendJsonPair(bodyP, &bodyLength, "continuation", tokenP, false) ||
+        !TextAppend(bodyP, YT_BODY_CAPACITY, &bodyLength, "}"))
+        return 0;
+    return BuildPost(clientP, visitorP,
+        "/youtubei/v1/search?prettyPrint=false", bodyP, bodyLength,
+        requestP, capacity);
+}
+
 Boolean YtSplitUrl(const Char *urlP, Char *hostP, UInt16 hostCapacity,
                    const Char **pathPP)
 {
@@ -499,6 +514,12 @@ Boolean YtSearchValue(void *contextP, const JsonScanner *s, UInt16 type,
     if (JsonPathIs(s, "responseContext/visitorData")) {
         if (!s->valueTruncated && length < sizeof(searchP->visitor))
             MemMove(searchP->visitor, textP, length + 1);
+        return true;
+    }
+    /* A token too long to keep means no next page. */
+    if (JsonPathEndsWith(s, "nextContinuationData/continuation")) {
+        if (!s->valueTruncated && length < sizeof(searchP->next))
+            MemMove(searchP->next, textP, length + 1);
         return true;
     }
     level = RendererLevel(s);
