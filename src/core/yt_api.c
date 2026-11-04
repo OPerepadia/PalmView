@@ -195,8 +195,10 @@ UInt16 YtBuildContinuationRequest(const YtClient *clientP,
 {
     UInt16 bodyLength = 0;
     if (!AppendContext(clientP, visitorP, bodyP, &bodyLength) ||
-        !AppendJsonPair(bodyP, &bodyLength, "continuation", tokenP, false) ||
-        !TextAppend(bodyP, YT_BODY_CAPACITY, &bodyLength, "}"))
+        !TextAppend(bodyP, YT_PAGE_BODY_CAPACITY, &bodyLength,
+            ",\"continuation\":\"") ||
+        !TextAppendJson(bodyP, YT_PAGE_BODY_CAPACITY, &bodyLength, tokenP, 0) ||
+        !TextAppend(bodyP, YT_PAGE_BODY_CAPACITY, &bodyLength, "\"}"))
         return 0;
     return BuildPost(clientP, visitorP,
         "/youtubei/v1/search?prettyPrint=false", bodyP, bodyLength,

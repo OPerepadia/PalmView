@@ -167,7 +167,7 @@ static Boolean ApiCall(const Char *requestP, UInt16 length,
 
 static int Search(const char *queryP, int pages)
 {
-    static Char request[YT_REQUEST_CAPACITY], body[YT_BODY_CAPACITY];
+    static Char request[YT_PAGE_REQUEST_CAPACITY], body[YT_PAGE_BODY_CAPACITY];
     static Char token[YT_CONTINUATION_CAPACITY];
     static YtSearch search;
     UInt16 i, length;

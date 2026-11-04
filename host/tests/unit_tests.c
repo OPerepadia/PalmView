@@ -259,7 +259,8 @@ static void TestRedirects(void)
 static void TestApiRequests(void)
 {
     YtClient client;
-    Char body[YT_BODY_CAPACITY], request[YT_REQUEST_CAPACITY];
+    static Char body[YT_PAGE_BODY_CAPACITY], request[YT_PAGE_REQUEST_CAPACITY];
+    static Char token[YT_CONTINUATION_CAPACITY];
     Char visitor[YT_VISITOR_CAPACITY];
     const char *bodyP;
     UInt16 length;
@@ -289,6 +290,9 @@ static void TestApiRequests(void)
     Expect("continuation request", length != 0 &&
         strncmp(request, "POST /youtubei/v1/search?", 25) == 0 &&
         strstr(request, ",\"continuation\":\"EtsDEg%3D%3D\"}") != 0);
+    memset(token, 'T', sizeof(token) - 1);
+    Expect("longest search token fits", YtBuildContinuationRequest(&client,
+        visitor, token, body, request, sizeof(request)) != 0);
     Expect("player request too small buffer", YtBuildPlayerRequest(&client,
         visitor, "dQw4w9WgXcQ", body, request, 600) == 0);
     length = YtBuildThumbRequest(&client, "dQw4w9WgXcQ", true, request,

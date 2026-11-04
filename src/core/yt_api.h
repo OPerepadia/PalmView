@@ -24,6 +24,9 @@
 #define YT_REQUEST_CAPACITY 2560
 #define YT_SEARCH_MAX 20
 #define YT_CONTINUATION_CAPACITY 1024
+/* For requests that carry a token. Search tokens can pass the normal limits. */
+#define YT_PAGE_BODY_CAPACITY 2048
+#define YT_PAGE_REQUEST_CAPACITY 3072
 #define YT_JSON_VALUE_CAPACITY YT_URL_CAPACITY
 #define YT_MAX_ITAG_CHOICES 4
 #define YT_VIDEO_CHOICES 2
@@ -56,7 +59,8 @@ UInt16 YtBuildPlayerRequest(const YtClient *clientP, const Char *visitorP,
 UInt16 YtBuildSearchRequest(const YtClient *clientP, const Char *visitorP,
                             const Char *queryP, const TextCodec *codecP,
                             Char *bodyP, Char *requestP, UInt16 capacity);
-/* The next page of a search, from the token in YtSearch's next. */
+/* The next page of a search, from the token in YtSearch's next. bodyP holds
+ * YT_PAGE_BODY_CAPACITY bytes. */
 UInt16 YtBuildContinuationRequest(const YtClient *clientP,
                                   const Char *visitorP, const Char *tokenP,
                                   Char *bodyP, Char *requestP,

@@ -78,6 +78,13 @@ typedef struct SavedEntry {
     BitmapType *bitmapP;
 } SavedEntry;
 
+/* For requests that carry a token, only while a page loads and every
+ * thumbnail is freed */
+typedef struct PageBuffers {
+    Char body[YT_PAGE_BODY_CAPACITY];
+    Char request[YT_PAGE_REQUEST_CAPACITY];
+} PageBuffers;
+
 typedef struct AppPrefs {
     Char visitor[YT_VISITOR_CAPACITY];
     UInt16 volume;              /* level, below VOLUME_LEVELS */
@@ -105,6 +112,7 @@ typedef struct AppState {
     Char query[HISTORY_CAPACITY];   /* the search the pages are of */
     UInt16 page;                /* of results shown, 0 for the first */
     MemHandle tokensH;          /* tokens of pages 1 to page, joined by '\0' */
+    PageBuffers *pageBuffersP;
     Boolean pagerHidden;        /* for a status message that needs the room */
     YtPlayer *playerP;
     UInt16 selected;

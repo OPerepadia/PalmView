@@ -457,7 +457,8 @@ static Int16 FeedJson(void *contextP, const UInt8 *dataP, UInt16 length)
 
 /* Starts an InnerTube API request. Failures are reported in the status
  * line for searches and in the progress text otherwise. */
-Boolean StartApiJob(AppState *s, UInt16 task, UInt16 requestLength)
+static Boolean StartApiRequest(AppState *s, UInt16 task, const Char *requestP,
+                               UInt16 requestLength)
 {
     Char message[48];
     Err error;
@@ -469,7 +470,7 @@ Boolean StartApiJob(AppState *s, UInt16 task, UInt16 requestLength)
         AppendHex(message, sizeof(message), (UInt16)error);
     } else {
         StrCopy(s->host, YT_API_HOST);
-        if (NetJobStart(&s->jobP, &s->netConfig, s->host, s->request,
+        if (NetJobStart(&s->jobP, &s->netConfig, s->host, requestP,
                 requestLength, FeedJson, s, &s->jobResult)) {
             s->task = task;
             s->taskStartTicks = TimGetTicks();
@@ -480,6 +481,11 @@ Boolean StartApiJob(AppState *s, UInt16 task, UInt16 requestLength)
     if (task == taskSearch) SetStatus(s, message);
     else StrCopy(s->progress, message);
     return false;
+}
+
+Boolean StartApiJob(AppState *s, UInt16 task, UInt16 requestLength)
+{
+    return StartApiRequest(s, task, s->request, requestLength);
 }
 
 /* Main form */
@@ -705,24 +711,39 @@ static Boolean KeepTokens(AppState *s, UInt16 count, const Char *tokenP)
     return true;
 }
 
+static void FreePageBuffers(AppState *s)
+{
+    if (s->pageBuffersP != 0) MemPtrFree(s->pageBuffersP);
+    s->pageBuffersP = 0;
+}
+
 /* Loads a page of the results, 0 being the first. */
 static void LoadPage(AppState *s, UInt16 page)
 {
+    const Char *requestP = s->request;
     UInt16 length;
     StopThumbs(s);
     if (s->task != taskIdle) return;
+    FreeThumbs(s);
     if (page == 0) {
         length = YtBuildSearchRequest(&s->client, s->prefs.visitor, s->query,
             &s->codec, s->body, s->request, sizeof(s->request));
     } else {
-        const Char *tokenP = (const Char *)MemHandleLock(s->tokensH);
+        const Char *tokenP;
         UInt16 i;
+        s->pageBuffersP = (PageBuffers *)MemPtrNew(sizeof(PageBuffers));
+        if (s->pageBuffersP == 0) {
+            SetStatus(s, "Out of memory.");
+            return;
+        }
+        tokenP = (const Char *)MemHandleLock(s->tokensH);
         for (i = 1; i < page; i++) tokenP += StrLen(tokenP) + 1;
         length = YtBuildContinuationRequest(&s->client, s->prefs.visitor,
-            tokenP, s->body, s->request, sizeof(s->request));
+            tokenP, s->pageBuffersP->body, s->pageBuffersP->request,
+            sizeof(s->pageBuffersP->request));
         MemHandleUnlock(s->tokensH);
+        requestP = s->pageBuffersP->request;
     }
-    FreeThumbs(s);
     YtSearchInit(s->searchP, &s->codec);
     s->page = page;
     s->resultTop = 0;
@@ -730,7 +751,8 @@ static void LoadPage(AppState *s, UInt16 page)
     JsonScanInit(&s->scanner, s->jsonValue, sizeof(s->jsonValue),
         YtSearchValue, YtSearchEnd, s->searchP);
     SetStatus(s, "Loading...");
-    StartApiJob(s, taskSearch, length);
+    if (!StartApiRequest(s, taskSearch, requestP, length))
+        FreePageBuffers(s);
     ShowResults(s, true);
 }
 
@@ -1092,6 +1114,7 @@ static void FinishJob(AppState *s)
     if (task == taskSearch) {
         s->task = taskIdle;
         FinishSearch(s);
+        FreePageBuffers(s);
     } else if (task == taskPlayer) {
         s->task = taskIdle;
         FinishPlayer(s);
@@ -1647,6 +1670,7 @@ static void StopApplication(AppState *s)
     if (s->searchTextH != 0) MemHandleFree(s->searchTextH);
     if (s->searchP != 0) MemPtrFree(s->searchP);
     if (s->tokensH != 0) MemHandleFree(s->tokensH);
+    FreePageBuffers(s);
     if (s->playerP != 0) MemPtrFree(s->playerP);
 }
 
