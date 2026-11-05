@@ -6,6 +6,7 @@
 #include <PalmOS.h>
 
 #include "resource.h"
+#include "results.h"
 #include "thumb.h"
 #include "thumbs.h"
 

@@ -240,15 +240,10 @@ void DescribeResult(const NetJobResult *r, Boolean toCard, Char *dstP,
                     UInt16 capacity);
 void DescribeFailure(const AppState *s, Char *dstP, UInt16 capacity);
 Boolean StartApiJob(AppState *s, UInt16 task, UInt16 requestLength);
-void DrawResultRow(const AppState *s, UInt16 row);
-void DrawListRow(const RectangleType *rowP, const Char *titleP,
-                 const Char *detailsP, const Char *durationP,
-                 BitmapType *bitmapP, Boolean focused);
-void FitResultRows(Coord listHeight, UInt16 *rowsP, Coord *rowHeightP);
-void ShowResults(AppState *s, Boolean draw);
+Boolean StartApiRequest(AppState *s, UInt16 task, const Char *requestP,
+                        UInt16 requestLength);
 Boolean HasInputArea(void);
 void SetObjectY(FormType *formP, UInt16 index, Coord y, Coord height);
-void LayoutMainForm(AppState *s);
 Boolean NavPressed(const EventType *eventP, UInt16 bit, UInt16 change);
 Boolean FocusTitlePicker(AppState *s, UInt16 triggerId);
 void ReleaseTitlePicker(AppState *s);

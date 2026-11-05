@@ -7,6 +7,7 @@
 #include <PalmOS.h>
 
 #include "resource.h"
+#include "results.h"
 #include "mp4_read.h"
 #include "saved.h"
 #include "thumbs.h"

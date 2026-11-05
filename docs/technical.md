@@ -24,9 +24,10 @@
 - `src/core/`: portable C for the Palm and the host. JSON scanning,
   YouTube requests and replies, MP4 merging and streaming, text encodings,
   thumbnails.
-- `src/palm/`: the app. One file per screen (`main.c`, `detail.c`,
-  `player.c`, `saved.c`), plus `net_job.c` (HTTPS), `stream_feed.c`
-  (streaming), `playback.c` (the player) and `download.c`.
+- `src/palm/`: the app. `main.c` has the event loop, and each screen has its
+  own file (`results.c` for search and channels, `detail.c`, `player.c`,
+  `saved.c`), plus `net_job.c` (HTTPS), `stream_feed.c` (streaming),
+  `playback.c` (the player) and `download.c`.
 - `src/arm/`: the native ARM modules. `decoder.c` wraps FFmpeg, `rgb.c`
   converts frames, `sound.c` holds the PCM ring and callback.
 - `src/bench/`: PalmView Bench.
