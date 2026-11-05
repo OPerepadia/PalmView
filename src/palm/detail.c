@@ -13,6 +13,12 @@
 /* The details form's layout at 160 high, from app.rcp */
 #define DETAIL_HEIGHT 160
 #define DETAIL_LINE 11
+#define DETAIL_HEAD_Y 16
+/* The channel trigger. Its frame is drawn a pixel outside these bounds, so
+ * its left edge lines up with the title. */
+#define CHANNEL_X 66
+#define CHANNEL_WIDTH 92
+#define CHANNEL_MARGIN 6
 #define DETAIL_INFO_Y 53
 #define DETAIL_INFO_HEIGHT 33
 #define DETAIL_PROGRESS_Y 94
@@ -100,6 +106,32 @@ UInt16 VideoChoice(const AppState *s)
     return formatP != 0 ? (UInt16)(formatP - s->playerP->video) : quality144;
 }
 
+/* The channel's line becomes a trigger, right under the title, when the
+ * list named the channel's ID. */
+void ShowChannelTrigger(AppState *s)
+{
+    FormType *formP = FrmGetActiveForm();
+    FieldType *fieldP = (FieldType *)GetObject(HeadField);
+    RectangleType bounds;
+    Coord lines;
+    FontID font;
+    if (s->searchP->items[s->selected].channelId[0] == '\0') return;
+    font = FntSetFont(stdFont);
+    FldGetBounds(fieldP, &bounds);
+    lines = s->head[FntWordWrap(s->head, (UInt16)bounds.extent.x)] != '\0' ? 2 : 1;
+    SetObjectY(formP, FrmGetObjectIndex(formP, HeadField), DETAIL_HEAD_Y,
+        lines * DETAIL_LINE);
+    FitText(&s->codec, s->channelLabel, s->searchP->items[s->selected].channel,
+        CHANNEL_WIDTH - CHANNEL_MARGIN);
+    RctSetRectangle(&bounds, CHANNEL_X, DETAIL_HEAD_Y + lines * DETAIL_LINE,
+        FntCharsWidth(s->channelLabel, (Int16)StrLen(s->channelLabel)) +
+        CHANNEL_MARGIN, DETAIL_LINE);
+    FntSetFont(font);
+    FrmSetObjectBounds(formP, FrmGetObjectIndex(formP, ChannelTrigger), &bounds);
+    CtlSetLabel((ControlType *)GetObject(ChannelTrigger), s->channelLabel);
+    ShowObject(ChannelTrigger, true);
+}
+
 void BuildInfo(AppState *s)
 {
     const YtSearchItem *itemP = &s->searchP->items[s->selected];
@@ -113,9 +145,12 @@ void BuildInfo(AppState *s)
     AppendTwoLines(&s->codec, s->head, sizeof(s->head),
         playerP->title[0] != '\0'
         ? playerP->title : itemP->title, bounds.extent.x);
-    Append(s->head, sizeof(s->head), "\n");
-    Append(s->head, sizeof(s->head), playerP->author[0] != '\0'
-        ? playerP->author : itemP->channel);
+    if (itemP->channelId[0] == '\0') {
+        Append(s->head, sizeof(s->head), "\n");
+        Append(s->head, sizeof(s->head), playerP->author[0] != '\0'
+            ? playerP->author
+            : s->channelId[0] != '\0' ? s->channelName : itemP->channel);
+    }
     infoP[0] = '\0';
     Append(infoP, capacity, itemP->length);
     if (itemP->views[0] != '\0') {
@@ -187,6 +222,8 @@ void RefreshDetail(AppState *s)
     ShowObject(DownloadButton, idle && YtPlayerPlayable(s->playerP) &&
         !(s->saved && s->quality == s->savedQuality));
     ShowObject(CancelButton, s->task == taskDownload);
+    CtlSetEnabled((ControlType *)GetObject(ChannelTrigger),
+        s->task != taskDownload);
     ShowObject(PlayButton, CanPlayDetail(s));
     ShowDetailQuality(s);
     DrawProgressBar(s);

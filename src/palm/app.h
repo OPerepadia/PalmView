@@ -78,12 +78,24 @@ typedef struct SavedEntry {
     BitmapType *bitmapP;
 } SavedEntry;
 
-/* For requests that carry a token, only while a page loads and every
- * thumbnail is freed */
+/* For requests that carry a token and a channel's replies, only while a
+ * page loads and every thumbnail is freed */
 typedef struct PageBuffers {
+    Char value[YT_CHANNEL_TOKEN_CAPACITY];
     Char body[YT_PAGE_BODY_CAPACITY];
     Char request[YT_PAGE_REQUEST_CAPACITY];
 } PageBuffers;
+
+/* The search results while a channel's screen is up, without thumbnails */
+typedef struct ListState {
+    YtSearch *searchP;
+    MemHandle tokensH;
+    UInt16 page;
+    UInt16 top;
+    UInt16 focus;
+    Boolean paged;
+    Char status[80];
+} ListState;
 
 typedef struct AppPrefs {
     Char visitor[YT_VISITOR_CAPACITY];
@@ -110,10 +122,18 @@ typedef struct AppState {
     AppPrefs prefs;
     YtSearch *searchP;
     Char query[HISTORY_CAPACITY];   /* the search the pages are of */
-    UInt16 page;                /* of results shown, 0 for the first */
-    MemHandle tokensH;          /* tokens of pages 1 to page, joined by '\0' */
+    Char channelId[YT_CHANNEL_ID_CAPACITY]; /* while its screen is up, or "" */
+    Char channelName[32];
+    Char channelTitle[44];      /* the name, cut to fit, and " - Videos" */
+    Char *channelNextP;         /* the next reply's token, on its screen */
     PageBuffers *pageBuffersP;
+    ListState searchList;
+    UInt16 page;                /* of results shown, 0 for the first */
+    /* Search: tokens of pages 1 to page. Channel: of replies 1 onward. */
+    MemHandle tokensH;
+    Boolean paged;              /* the list has other pages */
     Boolean pagerHidden;        /* for a status message that needs the room */
+    Boolean screenLocked;       /* until a channel's screen is drawn */
     YtPlayer *playerP;
     UInt16 selected;
     UInt16 resultTop;           /* result in the first row */
@@ -156,6 +176,7 @@ typedef struct AppState {
     MemHandle searchTextH;
     Char status[80];
     Char head[144];             /* title and channel, beside the thumbnail */
+    Char channelLabel[YT_AUTHOR_CAPACITY + 3];  /* on ChannelTrigger */
     Char info[384];
     Char progress[192];
     UInt16 percent;
@@ -199,7 +220,9 @@ typedef struct AppState {
 
 void *GetObject(UInt16 id);
 Boolean OnForm(UInt16 formId);
+Boolean OnListForm(void);
 void Append(Char *dstP, UInt16 capacity, const Char *textP);
+void FitText(const TextCodec *codecP, Char *dstP, const Char *srcP, Coord width);
 void AppendNumber(Char *dstP, UInt16 capacity, UInt32 value);
 void AppendHex(Char *dstP, UInt16 capacity, UInt16 value);
 void AppendSize(Char *dstP, UInt16 capacity, UInt32 bytes);

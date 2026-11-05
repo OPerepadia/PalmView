@@ -138,7 +138,7 @@ static UInt16 NextThumb(const AppState *s)
     if (OnForm(DetailForm))
         return s->thumbs[s->selected].state == thumbMissing
             ? s->selected : NO_RESULT;
-    if (!OnForm(MainForm)) return NO_RESULT;
+    if (!OnListForm()) return NO_RESULT;
     for (i = s->resultTop; i < s->resultTop + s->resultRows && i < count; i++)
         if (s->thumbs[i].state == thumbMissing) return i;
     for (i = 0; i < count; i++)
@@ -202,7 +202,7 @@ static void StoreThumb(AppState *s, UInt16 item)
         return;
     }
     thumbP->state = thumbLoaded;
-    if (OnForm(MainForm) && item >= s->resultTop &&
+    if (OnListForm() && item >= s->resultTop &&
             (UInt16)(item - s->resultTop) < s->resultRows)
         DrawResultRow(s, item - s->resultTop);
     if (OnForm(DetailForm) && item == s->selected) ShowDetailThumb(s);

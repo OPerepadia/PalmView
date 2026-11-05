@@ -37,6 +37,7 @@ Download the two files from the [latest release](https://github.com/OPerepadia/P
 3. The **Video Details** screen opens. Select a quality at the top right, then choose:
     - **Play**: streams the video in a built-in player
     - **Download**: saves it to the SD card
+    - Tap the channel's name to open its screen, with its newest videos first. Use the arrows or 5-way left and right to go further back, and **Back** to return to your search.
 
 Downloaded videos are stored in `/PalmView` on the card. Open **Downloads** from the menu at the top right to play saved videos.
 

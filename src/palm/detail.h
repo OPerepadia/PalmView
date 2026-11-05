@@ -12,6 +12,7 @@ void LayoutDetailForm(void);
 void ScrollInfo(Int16 lines);
 UInt16 VideoChoice(const AppState *s);
 void BuildInfo(AppState *s);
+void ShowChannelTrigger(AppState *s);
 void RefreshDetail(AppState *s);
 void RefreshDetailChoice(AppState *s);
 void SwitchDetailQuality(AppState *s, UInt16 choice);

@@ -18,15 +18,20 @@
 #define YT_VISITOR_CAPACITY 512
 #define YT_TITLE_CAPACITY 96
 #define YT_AUTHOR_CAPACITY 40
+#define YT_CHANNEL_ID_CAPACITY 25
+/* A reply lists about 30 videos, split over two pages of this many. */
+#define YT_CHANNEL_PAGE 15
+/* Past the first few replies, a channel's tokens are about 4.2 KB. */
+#define YT_CHANNEL_TOKEN_CAPACITY 4608
+/* For requests that carry a token. Search tokens can pass the normal limits. */
+#define YT_PAGE_BODY_CAPACITY 5632
+#define YT_PAGE_REQUEST_CAPACITY 6656
 #define YT_REASON_CAPACITY 96
 #define YT_STATUS_CAPACITY 24
 #define YT_BODY_CAPACITY 1536
 #define YT_REQUEST_CAPACITY 2560
 #define YT_SEARCH_MAX 20
 #define YT_CONTINUATION_CAPACITY 1024
-/* For requests that carry a token. Search tokens can pass the normal limits. */
-#define YT_PAGE_BODY_CAPACITY 2048
-#define YT_PAGE_REQUEST_CAPACITY 3072
 #define YT_JSON_VALUE_CAPACITY YT_URL_CAPACITY
 #define YT_MAX_ITAG_CHOICES 4
 #define YT_VIDEO_CHOICES 2
@@ -65,6 +70,15 @@ UInt16 YtBuildContinuationRequest(const YtClient *clientP,
                                   const Char *visitorP, const Char *tokenP,
                                   Char *bodyP, Char *requestP,
                                   UInt16 capacity);
+
+/* A channel's first reply, from its Videos tab. */
+UInt16 YtBuildChannelRequest(const YtClient *clientP, const Char *visitorP,
+                             const Char *channelIdP, Char *bodyP,
+                             Char *requestP, UInt16 capacity);
+/* A channel's later replies. bodyP holds YT_PAGE_BODY_CAPACITY bytes. */
+UInt16 YtBuildChannelNextRequest(const YtClient *clientP, const Char *visitorP,
+                                 const Char *tokenP, Char *bodyP,
+                                 Char *requestP, UInt16 capacity);
 
 /* Splits an https URL into host and the start of its path. */
 Boolean YtSplitUrl(const Char *urlP, Char *hostP, UInt16 hostCapacity,
@@ -134,6 +148,9 @@ typedef struct YtSearchItem {
     Char videoId[YT_VIDEO_ID_CAPACITY];
     Char title[80];
     Char channel[32];
+    /* The channel the byline names, which may not be the uploader. "" for a
+     * channel's own videos and for joint bylines. */
+    Char channelId[YT_CHANNEL_ID_CAPACITY];
     Char length[10];
     Char published[20];
     Char views[20];
@@ -145,12 +162,22 @@ typedef struct YtSearch {
     Char visitor[YT_VISITOR_CAPACITY];
     YtSearchItem cur;
     YtSearchItem items[YT_SEARCH_MAX];
-    Char next[YT_CONTINUATION_CAPACITY];    /* the next page's token, or "" */
+    Char next[YT_CONTINUATION_CAPACITY];
+    Char *nextP;                /* the next page's token, or "" */
+    UInt16 nextCapacity;
+    UInt16 skip;                /* videos still to pass over */
+    UInt16 limit;
+    Boolean more;               /* the reply has videos past the limit */
     const TextCodec *codecP;    /* for the text above */
 } YtSearch;
 
 /* Text is stored in codecP, or Western when it is 0. */
 void YtSearchInit(YtSearch *searchP, const TextCodec *codecP);
+/* For one page of a channel's reply, its second half or its first. The next
+ * reply's token goes in nextP. Parse the reply as a search; its items have
+ * no channel. */
+void YtChannelPageInit(YtSearch *searchP, const TextCodec *codecP,
+                       Boolean second, Char *nextP, UInt16 nextCapacity);
 Boolean YtSearchValue(void *contextP, const JsonScanner *scannerP,
                       UInt16 type, const Char *textP, UInt16 length);
 Boolean YtSearchEnd(void *contextP, const JsonScanner *scannerP);

@@ -255,8 +255,13 @@ Without a `log=` line nothing is sent.
 
 ### API and downloads
 
-- Search and video info use YouTube's own API (`/youtubei/v1/search` and
-  `/player`).
+- Search, video info and channel videos use YouTube's own API
+  (`/youtubei/v1/search`, `/player` and `/browse`).
+- A channel's screen shows 15 videos per page, so it never uses more memory
+  than search results. Replies list about 30 videos, so each makes two pages.
+- Channel tokens reach about 4.2 KB. The buffers for that large a request are
+  allocated only while a page loads, when no thumbnails are in memory. The
+  saved tokens stop at 12 replies, about 350 videos.
 - Videos are itag 160 (256x144 H.264) or itag 133 (426x240), with itag
   140 (AAC-LC) for sound. Downloads fetch them in 4 MB ranges.
 - YouTube serves the two streams as separate fragmented MP4 files.

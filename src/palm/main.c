@@ -34,6 +34,17 @@
 /* The status line's width, and what the page selector leaves of it */
 #define STATUS_WIDTH 140
 #define STATUS_PAGER_WIDTH 90
+/* A channel's screen has no search row, so its list starts right under the
+ * title. Back shares the row with the status line. */
+#define CHANNEL_TOP 16
+#define CHANNEL_BOTTOM 18
+#define CHANNEL_ROW_BOTTOM 14
+#define CHANNEL_STATUS_PAGER_WIDTH 50
+#define CHANNEL_STATUS_WIDTH 114
+#define CHANNEL_TITLE_WIDTH 140
+/* Tokens for this many replies stay within what 5 fewer thumbnails per page
+ * free, so a channel never uses more memory than search results. */
+#define CHANNEL_REPLIES_MAX 12
 
 
 
@@ -48,6 +59,27 @@ void *GetObject(UInt16 id)
 Boolean OnForm(UInt16 formId)
 {
     return FrmGetActiveFormID() == formId;
+}
+
+Boolean OnListForm(void)
+{
+    return OnForm(MainForm) || OnForm(ChannelForm);
+}
+
+/* Copies srcP as it fits width in the current font, cut with "..." */
+void FitText(const TextCodec *codecP, Char *dstP, const Char *srcP, Coord width)
+{
+    const Char *ellipsisP = TextEllipsis(codecP);
+    UInt16 length = StrLen(srcP), ellipsis = StrLen(ellipsisP);
+    if (FntCharsWidth(srcP, (Int16)length) <= width) {
+        StrCopy(dstP, srcP);
+        return;
+    }
+    while (length > 0 && FntCharsWidth(srcP, (Int16)length) +
+            FntCharsWidth(ellipsisP, (Int16)ellipsis) > width)
+        length = TextCharStart(codecP, srcP, (UInt16)(length - 1));
+    MemMove(dstP, srcP, length);
+    StrCopy(dstP + length, ellipsisP);
 }
 
 void Append(Char *dstP, UInt16 capacity, const Char *textP)
@@ -134,9 +166,18 @@ static void DrawPageNumber(const AppState *s)
     FntSetFont(font);
 }
 
-/* The page selector at the end of the status line, while the results have
- * other pages. Kept tokens mean they do, even while page 1 reloads. A
- * message too long to share the line hides it until the next tap or key. */
+static Boolean HasNextPage(const AppState *s)
+{
+    if (s->channelId[0] == '\0') return s->searchP->nextP[0] != '\0';
+    /* The first half of a reply leads to its second half. */
+    if ((s->page & 1) == 0 && s->searchP->more) return true;
+    return s->searchP->nextP[0] != '\0' &&
+        s->page / 2 + 1 < CHANNEL_REPLIES_MAX;
+}
+
+/* The page selector on the status line, while the results have other
+ * pages. A message too long to share the line hides it until the next tap
+ * or key. */
 static void ShowPager(AppState *s)
 {
     static const Char kPrev[] = "\002", kPrevOff[] = "\005";
@@ -144,9 +185,11 @@ static void ShowPager(AppState *s)
     FieldType *fieldP = (FieldType *)GetObject(StatusField);
     ControlType *prevP = (ControlType *)GetObject(PagePrevButton);
     ControlType *nextP = (ControlType *)GetObject(PageNextButton);
-    Boolean hasPrev = s->page != 0, hasNext = s->searchP->next[0] != '\0';
-    Boolean visible = (hasPrev || hasNext || s->tokensH != 0) &&
-        !s->pagerHidden;
+    Boolean hasPrev = s->page != 0, hasNext = HasNextPage(s);
+    Boolean visible = s->paged && !s->pagerHidden;
+    Coord width = OnForm(ChannelForm)
+        ? (visible ? CHANNEL_STATUS_PAGER_WIDTH : CHANNEL_STATUS_WIDTH)
+        : (visible ? STATUS_PAGER_WIDTH : STATUS_WIDTH);
     RectangleType bounds;
     FldGetBounds(fieldP, &bounds);
     if (!visible) {
@@ -154,9 +197,9 @@ static void ShowPager(AppState *s)
         ShowObject(PageGadget, false);
         ShowObject(PageNextButton, false);
     }
-    if (bounds.extent.x != (visible ? STATUS_PAGER_WIDTH : STATUS_WIDTH)) {
+    if (bounds.extent.x != width) {
         FldEraseField(fieldP);
-        bounds.extent.x = visible ? STATUS_PAGER_WIDTH : STATUS_WIDTH;
+        bounds.extent.x = width;
         FldSetBounds(fieldP, &bounds);
         FldDrawField(fieldP);
     }
@@ -176,10 +219,10 @@ static void SetStatus(AppState *s, const Char *textP)
     FontID font;
     StrNCopy(s->status, textP, sizeof(s->status) - 1);
     s->status[sizeof(s->status) - 1] = '\0';
-    if (!OnForm(MainForm)) return;
+    if (!OnListForm()) return;
     font = FntSetFont(stdFont);
     s->pagerHidden = FntCharsWidth(s->status, (Int16)StrLen(s->status)) >
-        STATUS_PAGER_WIDTH;
+        (OnForm(ChannelForm) ? CHANNEL_STATUS_PAGER_WIDTH : STATUS_PAGER_WIDTH);
     FntSetFont(font);
     ShowPager(s);
     SetFieldText(StatusField, s->status);
@@ -690,6 +733,12 @@ static void OpenResult(AppState *s, UInt16 item)
 /* Pages of results. The first comes from the query, each later one from
  * a token the page before it gave. */
 
+static void ForgetTokens(AppState *s)
+{
+    if (s->tokensH != 0) MemHandleFree(s->tokensH);
+    s->tokensH = 0;
+}
+
 /* Keeps the first count tokens and adds tokenP after them. */
 static Boolean KeepTokens(AppState *s, UInt16 count, const Char *tokenP)
 {
@@ -717,54 +766,94 @@ static void FreePageBuffers(AppState *s)
     s->pageBuffersP = 0;
 }
 
-/* Loads a page of the results, 0 being the first. */
+static const Char *LockToken(AppState *s, UInt16 index)
+{
+    const Char *tokenP = (const Char *)MemHandleLock(s->tokensH);
+    while (index-- > 0) tokenP += StrLen(tokenP) + 1;
+    return tokenP;
+}
+
+static UInt16 BuildChannelPage(AppState *s, UInt16 page)
+{
+    PageBuffers *buffersP = s->pageBuffersP;
+    const Char *tokenP;
+    UInt16 length;
+    if (page < 2)
+        return YtBuildChannelRequest(&s->client, s->prefs.visitor, s->channelId,
+            buffersP->body, buffersP->request, sizeof(buffersP->request));
+    tokenP = LockToken(s, page / 2 - 1);
+    length = YtBuildChannelNextRequest(&s->client, s->prefs.visitor, tokenP,
+        buffersP->body, buffersP->request, sizeof(buffersP->request));
+    MemHandleUnlock(s->tokensH);
+    return length;
+}
+
+/* Loads a page of the results, 0 being the first. A channel's pages take
+ * turns as the two halves of its replies. */
 static void LoadPage(AppState *s, UInt16 page)
 {
+    Boolean channel = s->channelId[0] != '\0';
     const Char *requestP = s->request;
     UInt16 length;
     StopThumbs(s);
     if (s->task != taskIdle) return;
     FreeThumbs(s);
-    if (page == 0) {
-        length = YtBuildSearchRequest(&s->client, s->prefs.visitor, s->query,
-            &s->codec, s->body, s->request, sizeof(s->request));
-    } else {
-        const Char *tokenP;
-        UInt16 i;
+    if (channel || page != 0) {
         s->pageBuffersP = (PageBuffers *)MemPtrNew(sizeof(PageBuffers));
         if (s->pageBuffersP == 0) {
             SetStatus(s, "Out of memory.");
             return;
         }
-        tokenP = (const Char *)MemHandleLock(s->tokensH);
-        for (i = 1; i < page; i++) tokenP += StrLen(tokenP) + 1;
-        length = YtBuildContinuationRequest(&s->client, s->prefs.visitor,
-            tokenP, s->pageBuffersP->body, s->pageBuffersP->request,
-            sizeof(s->pageBuffersP->request));
-        MemHandleUnlock(s->tokensH);
-        requestP = s->pageBuffersP->request;
     }
-    YtSearchInit(s->searchP, &s->codec);
+    if (channel) {
+        length = BuildChannelPage(s, page);
+        requestP = s->pageBuffersP->request;
+        YtChannelPageInit(s->searchP, &s->codec, (page & 1) != 0,
+            s->channelNextP, YT_CHANNEL_TOKEN_CAPACITY);
+        JsonScanInit(&s->scanner, s->pageBuffersP->value,
+            sizeof(s->pageBuffersP->value), YtSearchValue, YtSearchEnd,
+            s->searchP);
+    } else {
+        if (page == 0) {
+            length = YtBuildSearchRequest(&s->client, s->prefs.visitor, s->query,
+                &s->codec, s->body, s->request, sizeof(s->request));
+        } else {
+            const Char *tokenP = LockToken(s, page - 1);
+            length = YtBuildContinuationRequest(&s->client, s->prefs.visitor,
+                tokenP, s->pageBuffersP->body, s->pageBuffersP->request,
+                sizeof(s->pageBuffersP->request));
+            MemHandleUnlock(s->tokensH);
+            requestP = s->pageBuffersP->request;
+        }
+        YtSearchInit(s->searchP, &s->codec);
+        JsonScanInit(&s->scanner, s->jsonValue, sizeof(s->jsonValue),
+            YtSearchValue, YtSearchEnd, s->searchP);
+    }
     s->page = page;
     s->resultTop = 0;
     if (s->resultFocus != NO_RESULT) s->resultFocus = 0;
-    JsonScanInit(&s->scanner, s->jsonValue, sizeof(s->jsonValue),
-        YtSearchValue, YtSearchEnd, s->searchP);
     SetStatus(s, "Loading...");
     if (!StartApiRequest(s, taskSearch, requestP, length))
         FreePageBuffers(s);
     ShowResults(s, true);
 }
 
+/* A channel's next page is its reply's second half, or the next reply. */
 static void NextPage(AppState *s)
 {
+    Boolean channel = s->channelId[0] != '\0';
+    UInt16 page = s->page + 1;
     StopThumbs(s);
-    if (s->task != taskIdle || s->searchP->next[0] == '\0') return;
-    if (!KeepTokens(s, s->page, s->searchP->next)) {
-        SetStatus(s, "Out of memory.");
-        return;
+    if (s->task != taskIdle || !HasNextPage(s)) return;
+    if (!channel || (s->page & 1) != 0 || !s->searchP->more) {
+        UInt16 kept = channel ? s->page / 2 : s->page;
+        if (!KeepTokens(s, kept, s->searchP->nextP)) {
+            SetStatus(s, "Out of memory.");
+            return;
+        }
+        if (channel) page = (UInt16)((kept + 1) * 2);
     }
-    LoadPage(s, s->page + 1);
+    LoadPage(s, page);
 }
 
 static void PreviousPage(AppState *s)
@@ -868,7 +957,8 @@ static void EnterInputArea(void)
 /* The forms that follow the input area */
 static Boolean IsWholeScreenForm(UInt16 formId)
 {
-    return formId == MainForm || formId == DetailForm || formId == SavedForm ||
+    return formId == MainForm || formId == ChannelForm ||
+        formId == DetailForm || formId == SavedForm ||
         formId == PlayForm;
 }
 
@@ -900,7 +990,12 @@ void LayoutMainForm(AppState *s)
     RectangleType bounds;
     Coord width, height, listHeight, statusY;
     UInt16 i;
-    if (!HasInputArea()) return;
+    if (!HasInputArea()) {
+        FitResultRows(160 - RESULT_TOP - RESULT_BOTTOM, &s->resultRows,
+            &s->resultRowHeight);
+        ShowResults(s, false);
+        return;
+    }
     WinGetDisplayExtent(&width, &height);
     statusY = height - RESULT_BOTTOM + 1;
     RctSetRectangle(&bounds, 0, 0, width, height);
@@ -974,6 +1069,48 @@ static UInt16 ShowHistory(AppState *s)
     return count;
 }
 
+static void InitChannelForm(AppState *s)
+{
+    FormType *formP = FrmGetActiveForm();
+    UInt16 index = FrmGetObjectIndex(formP, ResultGadget);
+    FrmSetGadgetData(formP, index, s);
+    FrmSetGadgetHandler(formP, index, ResultGadgetHandler);
+    index = FrmGetObjectIndex(formP, PageGadget);
+    FrmSetGadgetData(formP, index, s);
+    FrmSetGadgetHandler(formP, index, PageGadgetHandler);
+    FrmSetTitle(formP, s->channelTitle);
+    FldSetTextPtr((FieldType *)GetObject(StatusField), s->status);
+    ShowResults(s, false);
+}
+
+static void LayoutChannelForm(AppState *s)
+{
+    static const UInt16 kRowIds[] = {
+        StatusField, PagePrevButton, PageGadget, PageNextButton,
+        ChannelBackButton
+    };
+    FormType *formP = FrmGetActiveForm();
+    RectangleType bounds;
+    Coord width, height = 160, listHeight;
+    UInt16 i;
+    if (HasInputArea()) {
+        WinGetDisplayExtent(&width, &height);
+        RctSetRectangle(&bounds, 0, 0, width, height);
+        WinSetBounds(FrmGetWindowHandle(formP), &bounds);
+    }
+    FitResultRows(height - CHANNEL_TOP - CHANNEL_BOTTOM, &s->resultRows,
+        &s->resultRowHeight);
+    listHeight = s->resultRowHeight * (Coord)s->resultRows;
+    SetObjectY(formP, FrmGetObjectIndex(formP, ResultGadget), CHANNEL_TOP,
+        listHeight);
+    SetObjectY(formP, FrmGetObjectIndex(formP, ResultScrollBar), CHANNEL_TOP,
+        listHeight);
+    for (i = 0; i < sizeof(kRowIds) / sizeof(kRowIds[0]); i++)
+        SetObjectY(formP, FrmGetObjectIndex(formP, kRowIds[i]),
+            height - CHANNEL_ROW_BOTTOM, 0);
+    ShowResults(s, false);
+}
+
 static void StartSearch(AppState *s)
 {
     FieldType *fieldP = (FieldType *)GetObject(SearchField);
@@ -983,8 +1120,8 @@ static void StartSearch(AppState *s)
     RememberSearch(s, queryP);
     StrNCopy(s->query, queryP, sizeof(s->query) - 1);
     s->query[sizeof(s->query) - 1] = '\0';
-    if (s->tokensH != 0) MemHandleFree(s->tokensH);
-    s->tokensH = 0;
+    ForgetTokens(s);
+    s->paged = false;
     s->resultFocus = NO_RESULT;
     LoadPage(s, 0);
 }
@@ -995,12 +1132,16 @@ static void FinishSearch(AppState *s)
     Boolean ok = s->jobResult.status == netJobOk &&
         JsonScanFinish(&s->scanner) == jsonOk;
     message[0] = '\0';
+    if (HasNextPage(s)) s->paged = true;
     if (!ok && s->jobResult.status == netJobOk) {
         StrCopy(message, "Unexpected reply from YouTube.");
     } else if (!ok) {
         DescribeFailure(s, message, sizeof(message));
     } else if (s->searchP->count == 0) {
         StrCopy(message, s->page == 0 ? "No results." : "No more results.");
+    } else if (s->channelId[0] != '\0') {
+        AppendNumber(message, sizeof(message), s->searchP->count);
+        Append(message, sizeof(message), " videos");
     } else {
         AppendNumber(message, sizeof(message), s->searchP->count);
         Append(message, sizeof(message), " results in ");
@@ -1009,7 +1150,7 @@ static void FinishSearch(AppState *s)
     }
     if (ok) SaveVisitor(s, s->searchP->visitor);
     SetStatus(s, message);
-    if (OnForm(MainForm)) ShowResults(s, true);
+    if (OnListForm()) ShowResults(s, true);
     if (ok) StartThumbs(s);
 }
 
@@ -1160,7 +1301,7 @@ static void CancelJob(AppState *s)
     if (s->jobP != 0) NetJobCancel(s->jobP);
 }
 
-static void ReturnToMain(AppState *s)
+static void StopJob(AppState *s)
 {
     if (s->jobP != 0) {
         NetJobCancel(s->jobP);
@@ -1170,11 +1311,93 @@ static void ReturnToMain(AppState *s)
     s->task = taskIdle;
     StopThumbs(s);
     FreeBitmap(&s->detailThumbP, &s->detailBitsP);
-    FrmReturnToForm(MainForm);
-    LayoutMainForm(s);
+}
+
+static void ReturnToList(AppState *s)
+{
+    Boolean channel = s->channelId[0] != '\0';
+    StopJob(s);
+    FrmReturnToForm(channel ? ChannelForm : MainForm);
+    if (channel) LayoutChannelForm(s);
+    else LayoutMainForm(s);
     FrmDrawForm(FrmGetActiveForm());
     ShowResults(s, true);
     StartThumbs(s);
+}
+
+/* Opens the selected video's channel on its own screen. The search results
+ * wait in memory, without their thumbnails. */
+static void OpenChannel(AppState *s)
+{
+    static const Char kChannelSuffix[] = " - Videos";
+    const YtSearchItem *itemP = &s->searchP->items[s->selected];
+    ListState *listP = &s->searchList;
+    YtSearch *channelP;
+    FontID font;
+    if (s->task == taskDownload || s->channelId[0] != '\0') return;
+    channelP = (YtSearch *)MemPtrNew(sizeof(YtSearch));
+    s->channelNextP = (Char *)MemPtrNew(YT_CHANNEL_TOKEN_CAPACITY);
+    if (channelP == 0 || s->channelNextP == 0) {
+        if (channelP != 0) MemPtrFree(channelP);
+        if (s->channelNextP != 0) MemPtrFree(s->channelNextP);
+        s->channelNextP = 0;
+        SetProgressText(s, "Out of memory.");
+        return;
+    }
+    StopJob(s);
+    FreeThumbs(s);
+    StrCopy(s->channelId, itemP->channelId);
+    StrCopy(s->channelName, itemP->channel);
+    font = FntSetFont(boldFont);
+    FitText(&s->codec, s->channelTitle, itemP->channel, CHANNEL_TITLE_WIDTH -
+        FntCharsWidth(kChannelSuffix, sizeof(kChannelSuffix) - 1));
+    FntSetFont(font);
+    Append(s->channelTitle, sizeof(s->channelTitle), kChannelSuffix);
+    listP->searchP = s->searchP;
+    listP->tokensH = s->tokensH;
+    listP->page = s->page;
+    listP->top = s->resultTop;
+    listP->focus = s->resultFocus;
+    listP->paged = s->paged;
+    StrCopy(listP->status, s->status);
+    YtSearchInit(channelP, &s->codec);
+    s->searchP = channelP;
+    s->tokensH = 0;
+    s->page = 0;
+    s->resultTop = 0;
+    s->resultFocus = NO_RESULT;
+    s->paged = false;
+    s->pagerHidden = false;
+    s->status[0] = '\0';
+    /* Closing the details form shows the search screen. Locked, it is not
+     * seen. Deleting the form later instead left too little memory to play. */
+    s->screenLocked = WinScreenLock(winLockCopy) != 0;
+    FrmReturnToForm(MainForm);
+    FrmPopupForm(ChannelForm);
+}
+
+static void CloseChannel(AppState *s)
+{
+    ListState *listP = &s->searchList;
+    StopJob(s);
+    FreeThumbs(s);
+    FreePageBuffers(s);
+    ForgetTokens(s);
+    MemPtrFree(s->channelNextP);
+    s->channelNextP = 0;
+    MemPtrFree(s->searchP);
+    s->searchP = listP->searchP;
+    listP->searchP = 0;
+    s->tokensH = listP->tokensH;
+    listP->tokensH = 0;
+    s->page = listP->page;
+    s->resultTop = listP->top;
+    s->resultFocus = listP->focus;
+    s->paged = listP->paged;
+    s->pagerHidden = false;
+    StrCopy(s->status, listP->status);
+    s->channelId[0] = '\0';
+    ReturnToList(s);
 }
 
 /* A 5-way button pressed just now, as palmOne reports it */
@@ -1271,6 +1494,9 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
         } else if (OnForm(MainForm)) {
             LayoutMainForm(s);
             FrmDrawForm(FrmGetActiveForm());
+        } else if (OnForm(ChannelForm)) {
+            LayoutChannelForm(s);
+            FrmDrawForm(FrmGetActiveForm());
         } else if (OnForm(DetailForm)) {
             LayoutDetailForm();
             FrmDrawForm(FrmGetActiveForm());
@@ -1310,6 +1536,15 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 EnterInputArea();
                 LayoutMainForm(s);
                 FrmDrawForm(FrmGetActiveForm());
+            } else if (OnForm(ChannelForm)) {
+                InitChannelForm(s);
+                UseApplicationFocus();
+                EnterInputArea();
+                LayoutChannelForm(s);
+                FrmDrawForm(FrmGetActiveForm());
+                if (s->screenLocked) WinScreenUnlock();
+                s->screenLocked = false;
+                LoadPage(s, 0);
             } else if (OnForm(SavedForm)) {
                 UseApplicationFocus();
                 EnterInputArea();
@@ -1335,6 +1570,7 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 FldSetTextPtr((FieldType *)GetObject(ProgressField),
                     s->progress);
                 FrmDrawForm(FrmGetActiveForm());
+                ShowChannelTrigger(s);
                 RefreshDetail(s);
             }
             return true;
@@ -1355,7 +1591,9 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 case PageNextButton: NextPage(s); return true;
                 case DownloadButton: StartDownload(s); return true;
                 case CancelButton: CancelJob(s); return true;
-                case BackButton: ReturnToMain(s); return true;
+                case BackButton: ReturnToList(s); return true;
+                case ChannelBackButton: CloseChannel(s); return true;
+                case ChannelTrigger: OpenChannel(s); return true;
                 case SavedBackButton: ReturnFromSaved(s); return true;
                 case SavedPlayButton: PlaySaved(s); return true;
                 case SavedDeleteButton: DeleteSaved(s); return true;
@@ -1417,7 +1655,7 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 return true;
             break;
         case penDownEvent:
-            if (OnForm(MainForm) && s->pagerHidden) {
+            if (OnListForm() && s->pagerHidden) {
                 s->pagerHidden = false;
                 ShowPager(s);
             }
@@ -1459,7 +1697,7 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
             }
             break;
         case keyDownEvent:
-            if (OnForm(MainForm) && s->pagerHidden) {
+            if (OnListForm() && s->pagerHidden) {
                 s->pagerHidden = false;
                 ShowPager(s);
             }
@@ -1475,12 +1713,13 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 StartSearch(s);
                 return true;
             }
-            if (OnForm(MainForm)) {
+            if (OnListForm()) {
                 WChar c = eventP->data.keyDown.chr;
                 if (c == vchrPageUp || c == vchrRockerUp ||
                         c == vchrPageDown || c == vchrRockerDown) {
                     Boolean up = c == vchrPageUp || c == vchrRockerUp;
-                    if (up && (s->resultFocus == NO_RESULT || s->resultFocus == 0) &&
+                    if (up && OnForm(MainForm) &&
+                            (s->resultFocus == NO_RESULT || s->resultFocus == 0) &&
                             FocusTitlePicker(s, MainScreenTrigger)) {
                         FocusResult(s, NO_RESULT);
                         return true;
@@ -1539,7 +1778,7 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
             break;
         case sclRepeatEvent:
         case sclExitEvent:
-            if (OnForm(MainForm)) {
+            if (OnListForm()) {
                 Int16 to = eventP->eType == sclRepeatEvent
                     ? eventP->data.sclRepeat.newValue
                     : eventP->data.sclExit.newValue;
@@ -1669,8 +1908,11 @@ static void StopApplication(AppState *s)
     CloseTlsLibrary(s);
     if (s->searchTextH != 0) MemHandleFree(s->searchTextH);
     if (s->searchP != 0) MemPtrFree(s->searchP);
-    if (s->tokensH != 0) MemHandleFree(s->tokensH);
+    ForgetTokens(s);
     FreePageBuffers(s);
+    if (s->channelNextP != 0) MemPtrFree(s->channelNextP);
+    if (s->searchList.searchP != 0) MemPtrFree(s->searchList.searchP);
+    if (s->searchList.tokensH != 0) MemHandleFree(s->searchList.tokensH);
     if (s->playerP != 0) MemPtrFree(s->playerP);
 }
 

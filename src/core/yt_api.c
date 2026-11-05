@@ -3,6 +3,9 @@
 #include "yt_api.h"
 #include "text.h"
 
+/* InnerTube's opaque name for a channel's Videos tab */
+#define YT_VIDEOS_TAB "EgZ2aWRlb3PyBgQKAjoA"
+
 static void CopyField(Char *dstP, UInt16 capacity, const Char *srcP)
 {
     StrNCopy(dstP, srcP, capacity - 1);
@@ -188,10 +191,9 @@ UInt16 YtBuildSearchRequest(const YtClient *clientP, const Char *visitorP,
         requestP, capacity);
 }
 
-UInt16 YtBuildContinuationRequest(const YtClient *clientP,
-                                  const Char *visitorP, const Char *tokenP,
-                                  Char *bodyP, Char *requestP,
-                                  UInt16 capacity)
+static UInt16 BuildNextRequest(const YtClient *clientP, const Char *visitorP,
+                               const Char *pathP, const Char *tokenP,
+                               Char *bodyP, Char *requestP, UInt16 capacity)
 {
     UInt16 bodyLength = 0;
     if (!AppendContext(clientP, visitorP, bodyP, &bodyLength) ||
@@ -200,8 +202,41 @@ UInt16 YtBuildContinuationRequest(const YtClient *clientP,
         !TextAppendJson(bodyP, YT_PAGE_BODY_CAPACITY, &bodyLength, tokenP, 0) ||
         !TextAppend(bodyP, YT_PAGE_BODY_CAPACITY, &bodyLength, "\"}"))
         return 0;
+    return BuildPost(clientP, visitorP, pathP, bodyP, bodyLength, requestP,
+        capacity);
+}
+
+UInt16 YtBuildContinuationRequest(const YtClient *clientP,
+                                  const Char *visitorP, const Char *tokenP,
+                                  Char *bodyP, Char *requestP,
+                                  UInt16 capacity)
+{
+    return BuildNextRequest(clientP, visitorP,
+        "/youtubei/v1/search?prettyPrint=false", tokenP, bodyP, requestP,
+        capacity);
+}
+
+UInt16 YtBuildChannelNextRequest(const YtClient *clientP, const Char *visitorP,
+                                 const Char *tokenP, Char *bodyP,
+                                 Char *requestP, UInt16 capacity)
+{
+    return BuildNextRequest(clientP, visitorP,
+        "/youtubei/v1/browse?prettyPrint=false", tokenP, bodyP, requestP,
+        capacity);
+}
+
+UInt16 YtBuildChannelRequest(const YtClient *clientP, const Char *visitorP,
+                             const Char *channelIdP, Char *bodyP,
+                             Char *requestP, UInt16 capacity)
+{
+    UInt16 bodyLength = 0;
+    if (!AppendContext(clientP, visitorP, bodyP, &bodyLength) ||
+        !AppendJsonPair(bodyP, &bodyLength, "browseId", channelIdP, false) ||
+        !AppendJsonPair(bodyP, &bodyLength, "params", YT_VIDEOS_TAB, false) ||
+        !TextAppend(bodyP, YT_BODY_CAPACITY, &bodyLength, "}"))
+        return 0;
     return BuildPost(clientP, visitorP,
-        "/youtubei/v1/search?prettyPrint=false", bodyP, bodyLength,
+        "/youtubei/v1/browse?prettyPrint=false", bodyP, bodyLength,
         requestP, capacity);
 }
 
@@ -464,6 +499,20 @@ void YtSearchInit(YtSearch *searchP, const TextCodec *codecP)
 {
     MemSet(searchP, sizeof(*searchP), 0);
     searchP->codecP = codecP;
+    searchP->nextP = searchP->next;
+    searchP->nextCapacity = sizeof(searchP->next);
+    searchP->limit = YT_SEARCH_MAX;
+}
+
+void YtChannelPageInit(YtSearch *searchP, const TextCodec *codecP,
+                       Boolean second, Char *nextP, UInt16 nextCapacity)
+{
+    YtSearchInit(searchP, codecP);
+    searchP->nextP = nextP;
+    searchP->nextCapacity = nextCapacity;
+    searchP->skip = second ? YT_CHANNEL_PAGE : 0;
+    searchP->limit = YT_CHANNEL_PAGE;
+    nextP[0] = '\0';
 }
 
 /* Level just below the innermost video renderer key, or 0 if none. */
@@ -520,8 +569,8 @@ Boolean YtSearchValue(void *contextP, const JsonScanner *s, UInt16 type,
     }
     /* A token too long to keep means no next page. */
     if (JsonPathEndsWith(s, "nextContinuationData/continuation")) {
-        if (!s->valueTruncated && length < sizeof(searchP->next))
-            MemMove(searchP->next, textP, length + 1);
+        if (!s->valueTruncated && length < searchP->nextCapacity)
+            MemMove(searchP->nextP, textP, length + 1);
         return true;
     }
     level = RendererLevel(s);
@@ -534,6 +583,11 @@ Boolean YtSearchValue(void *contextP, const JsonScanner *s, UInt16 type,
     } else if (TextField(s, level, "longBylineText", &first)) {
         if (first) SetText(searchP->codecP, itemP->channel, sizeof(itemP->channel), textP,
             length, true);
+    } else if (JsonPathFrom(s, level,
+            "longBylineText/runs/#/navigationEndpoint/browseEndpoint/browseId")) {
+        if (JsonIndexAt(s, (UInt16)(level + 2)) == 0 && !s->valueTruncated &&
+                length < sizeof(itemP->channelId))
+            MemMove(itemP->channelId, textP, length + 1);
     } else if (TextField(s, level, "lengthText", &first)) {
         if (first) SetText(searchP->codecP, itemP->length, sizeof(itemP->length), textP,
             length, true);
@@ -559,9 +613,15 @@ Boolean YtSearchEnd(void *contextP, const JsonScanner *s)
         (!StringIs(s->frames[s->depth - 1].key, "compactVideoRenderer") &&
          !StringIs(s->frames[s->depth - 1].key, "videoRenderer")))
         return true;
-    if (searchP->cur.videoId[0] != '\0' && searchP->count < YT_SEARCH_MAX) {
-        if (searchP->cur.length[0] == '\0') searchP->cur.live = true;
-        searchP->items[searchP->count++] = searchP->cur;
+    if (searchP->cur.videoId[0] != '\0') {
+        if (searchP->skip > 0) {
+            searchP->skip--;
+        } else if (searchP->count < searchP->limit) {
+            if (searchP->cur.length[0] == '\0') searchP->cur.live = true;
+            searchP->items[searchP->count++] = searchP->cur;
+        } else {
+            searchP->more = true;
+        }
     }
     MemSet(&searchP->cur, sizeof(searchP->cur), 0);
     return true;

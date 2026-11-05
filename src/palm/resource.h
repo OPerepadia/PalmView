@@ -28,6 +28,7 @@
 #define HeadField 1110
 #define DetailQualityTrigger 1111
 #define DetailQualityList 1112
+#define ChannelTrigger 1113
 
 #define MainMenuBar 1200
 #define MenuAbout 1201
@@ -55,6 +56,9 @@
 #define PlayQualityList 1509
 
 #define FullForm 1600
+
+#define ChannelForm 1800
+#define ChannelBackButton 1801
 
 #define AboutForm 1700
 #define AboutOkButton 1701

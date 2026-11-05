@@ -290,6 +290,11 @@ static void TestApiRequests(void)
     Expect("continuation request", length != 0 &&
         strncmp(request, "POST /youtubei/v1/search?", 25) == 0 &&
         strstr(request, ",\"continuation\":\"EtsDEg%3D%3D\"}") != 0);
+    length = YtBuildChannelRequest(&client, visitor, "UC012345678901234567890a",
+        body, request, sizeof(request));
+    Expect("channel request", length != 0 &&
+        strncmp(request, "POST /youtubei/v1/browse?", 25) == 0 &&
+        strstr(request, "\"browseId\":\"UC012345678901234567890a\",\"params\":\"") != 0);
     memset(token, 'T', sizeof(token) - 1);
     Expect("longest search token fits", YtBuildContinuationRequest(&client,
         visitor, token, body, request, sizeof(request)) != 0);
@@ -383,14 +388,81 @@ static void TestAudioTracks(void)
     ExpectText("one language: first preferred itag", player.audio.url, "https://a/140");
 }
 
-static void ParseSearch(YtSearch *searchP, const char *jsonP)
+static void ScanSearch(YtSearch *searchP, const char *jsonP)
 {
-    static Char value[YT_JSON_VALUE_CAPACITY];
+    static Char value[YT_CHANNEL_TOKEN_CAPACITY];
     JsonScanner scanner;
-    YtSearchInit(searchP, &kWestern);
     JsonScanInit(&scanner, value, sizeof(value), YtSearchValue, YtSearchEnd, searchP);
     JsonScanFeed(&scanner, (const UInt8 *)jsonP, (UInt16)strlen(jsonP));
     Expect("search page parsed", JsonScanFinish(&scanner) == jsonOk);
+}
+
+static void ParseSearch(YtSearch *searchP, const char *jsonP)
+{
+    YtSearchInit(searchP, &kWestern);
+    ScanSearch(searchP, jsonP);
+}
+
+/* A reply of count videos, with a next token of tokenLength bytes */
+static void MakeChannelReply(char *jsonP, size_t capacity, int count, int tokenLength)
+{
+    size_t used = (size_t)snprintf(jsonP, capacity,
+        "{\"continuationContents\":{\"itemSectionContinuation\":{\"contents\":[");
+    int i;
+    for (i = 0; i < count; i++)
+        used += (size_t)snprintf(jsonP + used, capacity - used,
+            "%s{\"compactVideoRenderer\":{\"videoId\":\"v%02d\","
+            "\"lengthText\":{\"simpleText\":\"1:00\"}}}", i != 0 ? "," : "", i);
+    used += (size_t)snprintf(jsonP + used, capacity - used,
+        "],\"continuations\":[{\"nextContinuationData\":{\"continuation\":\"");
+    memset(jsonP + used, 'T', (size_t)tokenLength);
+    used += (size_t)tokenLength;
+    snprintf(jsonP + used, capacity - used, "\"}}]}}}");
+}
+
+/* A reply splits over two pages, whatever its length. */
+static void TestChannelPages(void)
+{
+    static YtSearch search;
+    static char json[32768];
+    static Char next[YT_CHANNEL_TOKEN_CAPACITY], body[YT_PAGE_BODY_CAPACITY];
+    static Char request[YT_PAGE_REQUEST_CAPACITY];
+    Char visitor[YT_VISITOR_CAPACITY];
+    YtClient client;
+    UInt16 length;
+    MakeChannelReply(json, sizeof(json), 30, 4216);
+    YtChannelPageInit(&search, &kWestern, false, next, sizeof(next));
+    ScanSearch(&search, json);
+    Expect("first half", search.count == 15 && search.more &&
+        strcmp(search.items[14].videoId, "v14") == 0);
+    Expect("long token kept", strlen(next) == 4216);
+    YtChannelPageInit(&search, &kWestern, true, next, sizeof(next));
+    ScanSearch(&search, json);
+    Expect("second half", search.count == 15 && !search.more &&
+        strcmp(search.items[0].videoId, "v15") == 0 &&
+        strcmp(search.items[14].videoId, "v29") == 0);
+    MakeChannelReply(json, sizeof(json), 20, 8);
+    YtChannelPageInit(&search, &kWestern, true, next, sizeof(next));
+    ScanSearch(&search, json);
+    Expect("short second half", search.count == 5 && !search.more);
+    MakeChannelReply(json, sizeof(json), 12, 8);
+    YtChannelPageInit(&search, &kWestern, false, next, sizeof(next));
+    ScanSearch(&search, json);
+    Expect("short first half", search.count == 12 && !search.more);
+    MakeChannelReply(json, sizeof(json), 1, 4700);
+    YtChannelPageInit(&search, &kWestern, false, next, sizeof(next));
+    ScanSearch(&search, json);
+    ExpectText("token too long", next, "");
+    /* The largest token and visitor must fit the request. */
+    YtClientDefaults(&client);
+    memset(visitor, 'V', 450);
+    visitor[450] = '\0';
+    memset(next, 'T', YT_CHANNEL_TOKEN_CAPACITY - 1);
+    next[YT_CHANNEL_TOKEN_CAPACITY - 1] = '\0';
+    length = YtBuildChannelNextRequest(&client, visitor, next, body, request,
+        sizeof(request));
+    Expect("largest channel request fits", length != 0 &&
+        strncmp(request, "POST /youtubei/v1/browse?", 25) == 0);
 }
 
 /* The first page and the ones after it keep the next page's token in
@@ -405,6 +477,7 @@ static void TestSearchPages(void)
         "\"continuations\":[{\"nextContinuationData\":{\"continuation\":\"T2\"}}]}}],"
         "\"continuations\":[{\"reloadContinuationData\":{\"continuation\":\"R\"}}]}}}");
     Expect("first page", search.count == 1);
+    ExpectText("no byline, no channel", search.items[0].channelId, "");
     ExpectText("first page's next token", search.next, "T2");
     ParseSearch(&search, "{\"continuationContents\":{\"itemSectionContinuation\":{"
         "\"contents\":[{\"compactVideoRenderer\":{\"videoId\":\"bbbbbbbbbbb\","
@@ -416,6 +489,13 @@ static void TestSearchPages(void)
     ParseSearch(&search, "{\"continuationContents\":{\"itemSectionContinuation\":{"
         "\"contents\":[]}}}");
     ExpectText("last page", search.next, "");
+    ParseSearch(&search, "{\"contents\":[{\"compactVideoRenderer\":{"
+        "\"videoId\":\"ccccccccccc\",\"longBylineText\":{\"runs\":[{\"text\":\"Abc\","
+        "\"navigationEndpoint\":{\"browseEndpoint\":{\"browseId\":\"UCabc\"}}},"
+        "{\"text\":\"Def\",\"navigationEndpoint\":{\"browseEndpoint\":"
+        "{\"browseId\":\"UCdef\"}}}]},\"lengthText\":{\"simpleText\":\"3:00\"}}}]}");
+    ExpectText("byline's first channel", search.items[0].channelId, "UCabc");
+    TestChannelPages();
 }
 
 /* Sum of channel differences between RGB565 pixels and 8-bit RGB */

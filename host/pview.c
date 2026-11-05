@@ -4,6 +4,7 @@
  * parses the replies with the same code; only the TLS transport differs.
  *
  *   pview search QUERY [PAGES]       PAGES pages of results, default 1
+ *   pview channel CHANNEL_ID [PAGES] its newest videos, default 1 page
  *   pview info VIDEO_ID
  *   pview get VIDEO_ID OUT_DIR       download video and audio, then merge
  *   pview merge VIDEO AUDIO OUT      merge two downloaded streams
@@ -129,9 +130,12 @@ done:
     return status;
 }
 
+/* Larger only for channels: stream URLs must stay truncated to fit. */
+static UInt16 gValueCapacity = YT_JSON_VALUE_CAPACITY;
+
 typedef struct JsonSink {
     JsonScanner scanner;
-    Char value[YT_JSON_VALUE_CAPACITY];
+    Char value[YT_CHANNEL_TOKEN_CAPACITY];
     UInt32 bytes;
 } JsonSink;
 
@@ -152,7 +156,7 @@ static Boolean ApiCall(const Char *requestP, UInt16 length,
         fprintf(stderr, "request does not fit\n");
         return false;
     }
-    JsonScanInit(&sink.scanner, sink.value, sizeof(sink.value), valueProcP,
+    JsonScanInit(&sink.scanner, sink.value, gValueCapacity, valueProcP,
         endProcP, contextP);
     sink.bytes = 0;
     status = HttpsExchange(YT_API_HOST, requestP, length, FeedJson, &sink);
@@ -165,12 +169,23 @@ static Boolean ApiCall(const Char *requestP, UInt16 length,
     return true;
 }
 
+static void PrintResults(const YtSearch *searchP)
+{
+    UInt16 i;
+    for (i = 0; i < searchP->count; i++) {
+        const YtSearchItem *itemP = &searchP->items[i];
+        printf("%s  %-8s %s\n             %s %s | %s | %s%s\n", itemP->videoId,
+            itemP->length, itemP->title, itemP->channel, itemP->channelId,
+            itemP->published, itemP->views, itemP->live ? " | LIVE" : "");
+    }
+}
+
 static int Search(const char *queryP, int pages)
 {
     static Char request[YT_PAGE_REQUEST_CAPACITY], body[YT_PAGE_BODY_CAPACITY];
     static Char token[YT_CONTINUATION_CAPACITY];
     static YtSearch search;
-    UInt16 i, length;
+    UInt16 length;
     int page;
     for (page = 1; page <= pages; page++) {
         YtSearchInit(&search, 0);
@@ -183,14 +198,39 @@ static int Search(const char *queryP, int pages)
             return 1;
         SaveVisitor(search.visitor);
         if (pages > 1) printf("-- page %d\n", page);
-        for (i = 0; i < search.count; i++) {
-            const YtSearchItem *itemP = &search.items[i];
-            printf("%s  %-8s %s\n             %s | %s | %s%s\n", itemP->videoId,
-                itemP->length, itemP->title, itemP->channel, itemP->published,
-                itemP->views, itemP->live ? " | LIVE" : "");
-        }
+        PrintResults(&search);
         if (search.next[0] == '\0') break;
         StrCopy(token, search.next);
+    }
+    return 0;
+}
+
+static int Channel(const char *channelIdP, int pages)
+{
+    static Char request[YT_PAGE_REQUEST_CAPACITY];
+    static Char body[YT_PAGE_BODY_CAPACITY];
+    static Char next[YT_CHANNEL_TOKEN_CAPACITY], token[YT_CHANNEL_TOKEN_CAPACITY];
+    static YtSearch search;
+    int page;
+    gValueCapacity = YT_CHANNEL_TOKEN_CAPACITY;
+    for (page = 0; page < pages; page++) {
+        UInt16 length;
+        if (page != 0 && page % 2 == 0) {
+            if (next[0] == '\0') break;
+            StrCopy(token, next);
+        }
+        length = page < 2
+            ? YtBuildChannelRequest(&gClient, gVisitor, channelIdP, body,
+                request, sizeof(request))
+            : YtBuildChannelNextRequest(&gClient, gVisitor, token, body,
+                request, sizeof(request));
+        YtChannelPageInit(&search, 0, page % 2 != 0, next, sizeof(next));
+        if (pages > 1)
+            printf("-- page %d, request %u bytes\n", page + 1, length);
+        if (!ApiCall(request, length, YtSearchValue, YtSearchEnd, &search))
+            return 1;
+        SaveVisitor(search.visitor);
+        PrintResults(&search);
     }
     return 0;
 }
@@ -343,11 +383,13 @@ int main(int argc, char **argv)
     LoadVisitor();
     if ((argc == 3 || argc == 4) && strcmp(argv[1], "search") == 0)
         return Search(argv[2], argc == 4 ? atoi(argv[3]) : 1);
+    if ((argc == 3 || argc == 4) && strcmp(argv[1], "channel") == 0)
+        return Channel(argv[2], argc == 4 ? atoi(argv[3]) : 1);
     if (argc == 3 && strcmp(argv[1], "info") == 0) return Info(argv[2]);
     if (argc == 4 && strcmp(argv[1], "get") == 0) return Get(argv[2], argv[3]);
     if (argc == 5 && strcmp(argv[1], "merge") == 0)
         return Merge(argv[2], argv[3], argv[4]);
-    fprintf(stderr, "usage: pview search QUERY [PAGES] | info ID | get ID DIR | "
+    fprintf(stderr, "usage: pview search QUERY [PAGES] | channel ID [PAGES] | info ID | get ID DIR | "
         "merge VIDEO AUDIO OUT\n");
     return 2;
 }
