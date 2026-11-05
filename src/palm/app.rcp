@@ -32,7 +32,7 @@ BEGIN
     GRAFFITISTATEINDICATOR AT (148 147)
 END
 
-FORM ID DetailForm AT (0 0 160 160)
+FORM ID DetailForm AT (0 0 160 160) NOSAVEBEHIND
 BEGIN
     TITLE "Video Details"
     GADGET ID ThumbGadget AT (2 16 60 34)
@@ -51,7 +51,7 @@ BEGIN
     POPUPLIST ID DetailQualityTrigger DetailQualityList
 END
 
-FORM ID ChannelForm AT (0 0 160 160)
+FORM ID ChannelForm AT (0 0 160 160) NOSAVEBEHIND
 BEGIN
     TITLE "Channel"
     GADGET ID ResultGadget AT (0 16 153 126)
@@ -63,7 +63,7 @@ BEGIN
     BUTTON "Back" ID ChannelBackButton AT (118 146 40 12)
 END
 
-FORM ID SavedForm AT (0 0 160 160)
+FORM ID SavedForm AT (0 0 160 160) NOSAVEBEHIND
 BEGIN
     TITLE "PalmView"
     POPUPTRIGGER "Downloads" ID SavedScreenTrigger AT (RIGHT@159 1 AUTO 11) RIGHTANCHOR
@@ -77,7 +77,7 @@ BEGIN
 END
 
 // The ARM decoder draws into the gadget's area of the screen directly.
-FORM ID PlayForm AT (0 0 160 160)
+FORM ID PlayForm AT (0 0 160 160) NOSAVEBEHIND
 BEGIN
     TITLE "Video"
     POPUPTRIGGER "144p" ID PlayQualityTrigger AT (RIGHT@159 1 AUTO 11) RIGHTANCHOR NONUSABLE
@@ -92,7 +92,7 @@ BEGIN
 END
 
 // Full screen: the ARM decoder draws the picture turned, over all of it.
-FORM ID FullForm AT (0 0 160 160) NOFRAME
+FORM ID FullForm AT (0 0 160 160) NOFRAME NOSAVEBEHIND
 BEGIN
 END
 
