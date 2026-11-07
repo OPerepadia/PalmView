@@ -6,7 +6,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd -P)"
-image="${PALM_TOOLCHAIN_IMAGE:-ghcr.io/palmsnipe/palm-toolchain:latest}"
+image="${PALM_TOOLCHAIN_IMAGE:-ghcr.io/palmsnipe/palm-toolchain:latest@sha256:155a1f8082b55507825a61ca271521e662f4a88c3d030958a33ecab9e8379532}"
 dest="$root/deps/palm-toolchain"
 
 if [[ -e "$dest" ]]; then

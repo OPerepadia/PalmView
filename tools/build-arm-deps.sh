@@ -78,6 +78,6 @@ done
 arm-none-eabi-ar rcs "$out/libm.a" "$out"/obj/*.o
 
 if [[ ! -x "$deps/venv/bin/python" ]] && python3 -m venv "$deps/venv"; then
-  "$deps/venv/bin/pip" install -q unicorn || echo "Unicorn not installed: make test-arm unavailable"
+  "$deps/venv/bin/pip" install -q unicorn==2.1.4 || echo "Unicorn not installed: make test-arm unavailable"
 fi
 echo "ARM dependencies ready. Build with: make bench"

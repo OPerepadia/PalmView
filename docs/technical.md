@@ -172,6 +172,10 @@ group, run it from a `newgrp docker` shell. You can also build
 [palm-toolchain](https://github.com/palmsnipe/palm-toolchain) from source
 and set `PALM_TOOLCHAIN_ROOT`.
 
+`fetch-toolchain.sh` pulls a fixed image by its digest. To update it, set
+`PALM_TOOLCHAIN_IMAGE` to the new image, run both fetch scripts again, then
+put the new digest into the script.
+
 `make` builds a debug PRC in `build/debug/`, and `make dist` puts the
 release PRCs in `dist/`.
 
