@@ -122,31 +122,6 @@ static void AppendShort(Char *lineP, UInt16 capacity, const Char *textP)
     AppendDetail(lineP, capacity, text);
 }
 
-/* A gray box with the duration on it, in place of a thumbnail that has not
- * arrived. Returns false if there is no memory for it. */
-static Boolean DrawPlaceholder(const RectangleType *thumbP, const Char *durationP)
-{
-    BitmapType *bitsP, *bitmapP = 0;
-    Coord width, height;
-    UInt16 rowBytes, error;
-    Boolean drawn = false;
-    bitsP = BmpCreate(THUMB_LIST_WIDTH, THUMB_LIST_HEIGHT, 16, 0, &error);
-    if (bitsP != 0) {
-        BmpGetDimensions(bitsP, &width, &height, &rowBytes);
-        if (rowBytes == (UInt16)(THUMB_LIST_WIDTH * 2)) {
-            ThumbPlaceholder((UInt16 *)BmpGetBits(bitsP), durationP);
-            bitmapP = (BitmapType *)BmpCreateBitmapV3(bitsP, kDensityDouble,
-                BmpGetBits(bitsP), 0);
-        }
-    }
-    if (bitmapP != 0) {
-        WinDrawBitmap(bitmapP, thumbP->topLeft.x, thumbP->topLeft.y);
-        drawn = true;
-    }
-    FreeBitmap(&bitmapP, &bitsP);
-    return drawn;
-}
-
 /* A list row: the thumbnail or a gray box with the duration, the title on
  * up to two lines, and the details. No title leaves it empty. Drawn in
  * native pixels for a hairline under each row. */
@@ -159,7 +134,6 @@ void DrawListRow(const RectangleType *rowP, const Char *titleP,
     static const RGBColorType kLine = { 0, 0xC8, 0xC8, 0xC8 };
     static const RGBColorType kFocus = { 0, 0xD6, 0xD6, 0xD6 };
     static const RGBColorType kFocusDetails = { 0, 0x60, 0x60, 0x60 };
-    static const RGBColorType kPlaceholder = { 0, 0xE0, 0xE0, 0xE0 };
     RectangleType bounds = *rowP, thumb;
     UInt16 coordinates, first, lines;
     Coord margin, lineHeight, left, width, y, bottom;
@@ -184,12 +158,10 @@ void DrawListRow(const RectangleType *rowP, const Char *titleP,
         RctSetRectangle(&thumb, bounds.topLeft.x + margin, bounds.topLeft.y +
             (bounds.extent.y - THUMB_LIST_HEIGHT) / 2, THUMB_LIST_WIDTH,
             THUMB_LIST_HEIGHT);
-        if (bitmapP != 0) {
+        if (bitmapP != 0)
             WinDrawBitmap(bitmapP, thumb.topLeft.x, thumb.topLeft.y);
-        } else if (!DrawPlaceholder(&thumb, durationP)) {
-            WinSetForeColorRGB(&kPlaceholder, 0);
-            WinDrawRectangle(&thumb, 0);
-        }
+        else
+            DrawThumbPlaceholder(&thumb, true, durationP);
         left = thumb.topLeft.x + thumb.extent.x + 2 * margin;
         width = bounds.topLeft.x + bounds.extent.x - margin - left;
         first = FntWordWrap(titleP, (UInt16)width);

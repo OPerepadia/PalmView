@@ -10,9 +10,9 @@
 #include "thumb.h"
 #include "thumbs.h"
 
-/* Decodes a thumbnail into a bitmap drawn at double density; the list's
- * has the video's duration on it. *bitsPP gets the bitmap that holds its
- * pixels. Returns 0 if it cannot. */
+/* Decodes a thumbnail into a bitmap drawn at double density, with the
+ * video's duration on it. *bitsPP gets the bitmap that holds its pixels.
+ * Returns 0 if it cannot. */
 static BitmapType *DecodeThumb(AppState *s, const Thumb *thumbP, Boolean list,
                                const Char *durationP, BitmapType **bitsPP)
 {
@@ -31,7 +31,7 @@ static BitmapType *DecodeThumb(AppState *s, const Thumb *thumbP, Boolean list,
         BmpGetDimensions(bitsP, &bitsWidth, &bitsHeight, &rowBytes);
         if (rowBytes == (UInt16)(width * 2) &&
                 ArmModuleCall(&s->thumbModule, armThumbCmdDecode, args, 4) == 1) {
-            if (list) ThumbBadge((UInt16 *)BmpGetBits(bitsP), durationP);
+            ThumbBadge((UInt16 *)BmpGetBits(bitsP), width, height, durationP);
             bitmapP = (BitmapType *)BmpCreateBitmapV3(bitsP, kDensityDouble,
                 BmpGetBits(bitsP), 0);
         }
@@ -102,11 +102,38 @@ static Int16 FeedThumb(void *contextP, const UInt8 *dataP, UInt16 length)
     return 0;
 }
 
-/* A light gray box stands in until the thumbnail arrives, or if it
- * does not. */
-static void DrawThumb(const AppState *s)
+void DrawThumbPlaceholder(const RectangleType *boundsP, Boolean list,
+                          const Char *durationP)
 {
     static const RGBColorType kPlaceholder = { 0, 0xE0, 0xE0, 0xE0 };
+    Coord width = list ? THUMB_LIST_WIDTH : THUMB_WIDTH;
+    Coord height = list ? THUMB_LIST_HEIGHT : THUMB_HEIGHT;
+    BitmapType *bitsP, *bitmapP = 0;
+    Coord bitsWidth, bitsHeight;
+    UInt16 rowBytes, error;
+    bitsP = BmpCreate(width, height, 16, 0, &error);
+    if (bitsP != 0) {
+        BmpGetDimensions(bitsP, &bitsWidth, &bitsHeight, &rowBytes);
+        if (rowBytes == (UInt16)(width * 2)) {
+            ThumbPlaceholder((UInt16 *)BmpGetBits(bitsP), width, height,
+                durationP);
+            bitmapP = (BitmapType *)BmpCreateBitmapV3(bitsP, kDensityDouble,
+                BmpGetBits(bitsP), 0);
+        }
+    }
+    if (bitmapP != 0) {
+        WinDrawBitmap(bitmapP, boundsP->topLeft.x, boundsP->topLeft.y);
+    } else {
+        WinPushDrawState();
+        WinSetForeColorRGB(&kPlaceholder, 0);
+        WinDrawRectangle(boundsP, 0);
+        WinPopDrawState();
+    }
+    FreeBitmap(&bitmapP, &bitsP);
+}
+
+static void DrawThumb(const AppState *s)
+{
     FormType *formP;
     RectangleType bounds;
     if (!OnForm(DetailForm)) return;
@@ -116,10 +143,8 @@ static void DrawThumb(const AppState *s)
         WinDrawBitmap(s->detailThumbP, bounds.topLeft.x, bounds.topLeft.y);
         return;
     }
-    WinPushDrawState();
-    WinSetForeColorRGB(&kPlaceholder, 0);
-    WinDrawRectangle(&bounds, 0);
-    WinPopDrawState();
+    DrawThumbPlaceholder(&bounds, false,
+        s->searchP->items[s->selected].length);
 }
 
 /* The selected video's thumbnail at full size, from the list's JPEG */
@@ -127,7 +152,7 @@ void ShowDetailThumb(AppState *s)
 {
     if (s->detailThumbP == 0 && s->thumbs[s->selected].state == thumbLoaded)
         s->detailThumbP = DecodeThumb(s, &s->thumbs[s->selected], false,
-            0, &s->detailBitsP);
+            s->searchP->items[s->selected].length, &s->detailBitsP);
     DrawThumb(s);
 }
 

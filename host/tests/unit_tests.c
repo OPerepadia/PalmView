@@ -567,10 +567,10 @@ static void TestThumbBadge(void)
         for (x = 0; x < THUMB_LIST_WIDTH; x++)
             plain[y * THUMB_LIST_WIDTH + x] = 0x4A69;
     memcpy(badge, plain, sizeof(plain));
-    ThumbBadge(badge, "");
-    ThumbBadge(badge, "live");
+    ThumbBadge(badge, THUMB_LIST_WIDTH, THUMB_LIST_HEIGHT, "");
+    ThumbBadge(badge, THUMB_LIST_WIDTH, THUMB_LIST_HEIGHT, "live");
     Expect("empty duration", memcmp(plain, badge, sizeof(plain)) == 0);
-    ThumbBadge(badge, "1:02:03");
+    ThumbBadge(badge, THUMB_LIST_WIDTH, THUMB_LIST_HEIGHT, "1:02:03");
     for (y = 0; y < THUMB_LIST_HEIGHT; y++)
         for (x = 0; x < THUMB_LIST_WIDTH; x++) {
             UInt16 p = badge[y * THUMB_LIST_WIDTH + x];
@@ -582,11 +582,39 @@ static void TestThumbBadge(void)
         }
     Expect("badge box", changed > 40 * 10);
     Expect("badge text", white > 20);
-    ThumbPlaceholder(plain, "12:34");
+    ThumbPlaceholder(plain, THUMB_LIST_WIDTH, THUMB_LIST_HEIGHT, "12:34");
     Expect("placeholder gray", plain[0] == 0xE71C &&
         plain[THUMB_LIST_WIDTH * THUMB_LIST_HEIGHT / 2] == 0xE71C);
     Expect("placeholder badge", plain[(THUMB_LIST_HEIGHT - 6) * THUMB_LIST_WIDTH +
         THUMB_LIST_WIDTH - 5] != 0xE71C);
+}
+
+/* On the larger thumbnail the badge keeps its size, in that corner. */
+static void TestDetailBadge(void)
+{
+    static UInt16 list[THUMB_LIST_WIDTH * THUMB_LIST_HEIGHT];
+    static UInt16 full[THUMB_WIDTH * THUMB_HEIGHT];
+    int x, y, listChanged = 0, fullChanged = 0;
+    ThumbPlaceholder(list, THUMB_LIST_WIDTH, THUMB_LIST_HEIGHT, "3:33");
+    ThumbPlaceholder(full, THUMB_WIDTH, THUMB_HEIGHT, "3:33");
+    for (y = 0; y < THUMB_LIST_HEIGHT; y++)
+        for (x = 0; x < THUMB_LIST_WIDTH; x++)
+            listChanged += list[y * THUMB_LIST_WIDTH + x] != 0xE71C;
+    for (y = 0; y < THUMB_HEIGHT; y++)
+        for (x = 0; x < THUMB_WIDTH; x++) {
+            UInt16 p = full[y * THUMB_WIDTH + x];
+            if (p == 0xE71C) continue;
+            fullChanged++;
+            if (x < THUMB_WIDTH - (THUMB_LIST_WIDTH - THUMB_LIST_WIDTH / 3) ||
+                    y < THUMB_HEIGHT - 20) {
+                Expect("detail badge outside its corner", 0);
+                continue;
+            }
+            Expect("detail badge matches the list's", p == list[
+                (y - (THUMB_HEIGHT - THUMB_LIST_HEIGHT)) * THUMB_LIST_WIDTH +
+                x - (THUMB_WIDTH - THUMB_LIST_WIDTH)]);
+        }
+    Expect("detail badge drawn", fullChanged > 0 && fullChanged == listChanged);
 }
 
 int main(void)
@@ -606,6 +634,7 @@ int main(void)
     TestSearchPages();
     TestThumbnails();
     TestThumbBadge();
+    TestDetailBadge();
     if (gFailures != 0) {
         printf("%d unit test(s) failed\n", gFailures);
         return 1;

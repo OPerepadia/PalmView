@@ -27,7 +27,8 @@ static UInt16 Lighten(UInt16 pixel, UInt16 coverage)
     return (UInt16)((red << 11) | (green << 5) | blue);
 }
 
-void ThumbBadge(UInt16 *pixelsP, const Char *textP)
+void ThumbBadge(UInt16 *pixelsP, Int16 width, Int16 height,
+                const Char *textP)
 {
     UInt16 textWidth = 0;
     Int16 x, y, left, top, right, bottom, glyph;
@@ -37,8 +38,8 @@ void ThumbBadge(UInt16 *pixelsP, const Char *textP)
         if (glyph >= 0) textWidth += kGlyphWidths[glyph];
     }
     if (textWidth == 0) return;
-    right = THUMB_LIST_WIDTH - BADGE_INSET;
-    bottom = THUMB_LIST_HEIGHT - BADGE_INSET;
+    right = width - BADGE_INSET;
+    bottom = height - BADGE_INSET;
     left = right - (Int16)textWidth - 2 * BADGE_PAD_X;
     top = bottom - FONT_ROWS - 2 * BADGE_PAD_Y;
     if (left < 0 || top < 0) return;
@@ -46,8 +47,8 @@ void ThumbBadge(UInt16 *pixelsP, const Char *textP)
         for (x = left; x < right; x++) {
             if ((x == left || x == right - 1) && (y == top || y == bottom - 1))
                 continue;
-            pixelsP[y * THUMB_LIST_WIDTH + x] =
-                (pixelsP[y * THUMB_LIST_WIDTH + x] >> 2) & DARKEN_MASK;
+            pixelsP[y * width + x] = (pixelsP[y * width + x] >> 2) &
+                DARKEN_MASK;
         }
     x = left + BADGE_PAD_X;
     for (charP = textP; *charP != '\0'; charP++) {
@@ -58,17 +59,18 @@ void ThumbBadge(UInt16 *pixelsP, const Char *textP)
             for (column = 0; column < kGlyphWidths[glyph]; column++) {
                 UInt16 coverage = kGlyphs[glyph][row][column];
                 UInt16 *pixelP = pixelsP + (top + BADGE_PAD_Y + row) *
-                    THUMB_LIST_WIDTH + x + column;
+                    width + x + column;
                 if (coverage != 0) *pixelP = Lighten(*pixelP, coverage);
             }
         x += kGlyphWidths[glyph];
     }
 }
 
-void ThumbPlaceholder(UInt16 *pixelsP, const Char *textP)
+void ThumbPlaceholder(UInt16 *pixelsP, Int16 width, Int16 height,
+                      const Char *textP)
 {
     UInt16 i;
-    for (i = 0; i < THUMB_LIST_WIDTH * THUMB_LIST_HEIGHT; i++)
+    for (i = 0; i < (UInt16)(width * height); i++)
         pixelsP[i] = PLACEHOLDER_GRAY;
-    ThumbBadge(pixelsP, textP);
+    ThumbBadge(pixelsP, width, height, textP);
 }

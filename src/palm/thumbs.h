@@ -14,6 +14,9 @@ void StopThumbs(AppState *s);
 UInt32 ThumbBytes(const AppState *s);
 void FreeThumbs(AppState *s);
 void ShowDetailThumb(AppState *s);
+/* A gray thumbnail with the duration on it, at list or details size */
+void DrawThumbPlaceholder(const RectangleType *boundsP, Boolean list,
+                          const Char *durationP);
 void StartThumbs(AppState *s);
 /* Saves a result's thumbnail beside its video; nothing if not loaded. */
 void SaveThumbBeside(AppState *s, UInt16 item, const Char *videoPathP);

@@ -99,6 +99,12 @@ static void AppendTwoLines(const TextCodec *codecP, Char *dstP,
     FntSetFont(font);
 }
 
+static void AppendInfoLine(Char *infoP, UInt16 capacity, const Char *textP)
+{
+    if (infoP[0] != '\0') Append(infoP, capacity, "\n");
+    Append(infoP, capacity, textP);
+}
+
 /* The chosen quality, or the one YouTube offers instead */
 UInt16 VideoChoice(const AppState *s)
 {
@@ -151,20 +157,15 @@ void BuildInfo(AppState *s)
             ? playerP->author
             : s->channelId[0] != '\0' ? s->channelName : itemP->channel);
     }
+    /* The duration is on the thumbnail. */
     infoP[0] = '\0';
-    Append(infoP, capacity, itemP->length);
-    if (itemP->views[0] != '\0') {
+    Append(infoP, capacity, itemP->views);
+    if (itemP->views[0] != '\0' && itemP->published[0] != '\0')
         Append(infoP, capacity, " | ");
-        Append(infoP, capacity, itemP->views);
-    }
-    if (itemP->published[0] != '\0') {
-        Append(infoP, capacity, " | ");
-        Append(infoP, capacity, itemP->published);
-    }
+    Append(infoP, capacity, itemP->published);
     if (YtPlayerVideo(playerP, 0) != 0 && playerP->audio.found) {
         UInt16 choice = VideoChoice(s);
-        Append(infoP, capacity, "\n");
-        Append(infoP, capacity, kQualityNames[choice]);
+        AppendInfoLine(infoP, capacity, kQualityNames[choice]);
         Append(infoP, capacity, " video ");
         AppendSize(infoP, capacity, playerP->video[choice].contentLength);
         Append(infoP, capacity, ", audio ");
@@ -311,7 +312,7 @@ void StartPlayer(AppState *s)
         YtPlayerValue, YtPlayerEnd, s->playerP);
     s->progress[0] = '\0';
     /* Where the stream sizes will be; FinishPlayer builds the info again. */
-    Append(s->info, sizeof(s->info), "\nGetting stream info...");
+    AppendInfoLine(s->info, sizeof(s->info), "Getting stream info...");
     if (!StartApiJob(s, taskPlayer, YtBuildPlayerRequest(&s->client,
             s->prefs.visitor, itemP->videoId, s->body, s->request,
             sizeof(s->request))))
