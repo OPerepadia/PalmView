@@ -21,10 +21,12 @@
 #define PLAY_TITLE_WIDTH 150
 #define PLAY_TITLE_SHORT_WIDTH 112
 
-/* 3 dB apart; 1024 is unity gain. */
+/* 3 dB apart; 1024 is unity gain. The levels above VOLUME_UNITY boost past
+ * it and may clip. */
 static const UInt16 kVolumeGain[VOLUME_LEVELS] = {
-    0, 45, 64, 91, 128, 181, 256, 362, 512, 724, 1024
+    0, 45, 64, 91, 128, 181, 256, 362, 512, 724, 1024, 1448, 2048, 2896
 };
+#define VOLUME_UNITY 10
 
 void GetVideoBounds(RectangleType *boundsP)
 {
@@ -69,12 +71,18 @@ static void FillBar(RectangleType *rP, Coord width, UInt8 gray)
     WinDrawRectangle(rP, 0);
 }
 
+static void FillColorBar(RectangleType *rP, Coord width,
+    const RGBColorType *colorP)
+{
+    WinSetForeColorRGB(colorP, 0);
+    rP->extent.x = width;
+    WinDrawRectangle(rP, 0);
+}
+
 static void FillAccentBar(RectangleType *rP, Coord width)
 {
     static const RGBColorType kAccent = ACCENT_COLOR;
-    WinSetForeColorRGB(&kAccent, 0);
-    rP->extent.x = width;
-    WinDrawRectangle(rP, 0);
+    FillColorBar(rP, width, &kAccent);
 }
 
 /* The bar under the video: played, downloaded, and not loaded yet. While
@@ -126,9 +134,12 @@ static void GetVolumeBounds(RectangleType *boundsP)
     FrmGetObjectBounds(formP, FrmGetObjectIndex(formP, PlayVolumeGadget), boundsP);
 }
 
-/* Ten bars rising left to right; the colored ones show the volume. */
+/* Thirteen bars rising left to right; the colored ones show the volume. The
+ * boost bars are amber, and pale amber while off. */
 void DrawVolume(const AppState *s)
 {
+    static const RGBColorType kBoost = { 0, 0xF0, 0xA0, 0x00 };
+    static const RGBColorType kBoostOff = { 0, 0xF4, 0xDC, 0xB0 };
     RectangleType bounds, bar;
     UInt16 coordinates, level;
     Coord step, shortest;
@@ -145,7 +156,10 @@ void DrawVolume(const AppState *s)
             (VOLUME_LEVELS - 2);
         bar.topLeft.x = bounds.topLeft.x + (level - 1) * step;
         bar.topLeft.y = bounds.topLeft.y + bounds.extent.y - bar.extent.y;
-        if (level <= s->prefs.volume) FillAccentBar(&bar, step * 2 / 3);
+        if (level > VOLUME_UNITY)
+            FillColorBar(&bar, step * 2 / 3,
+                level <= s->prefs.volume ? &kBoost : &kBoostOff);
+        else if (level <= s->prefs.volume) FillAccentBar(&bar, step * 2 / 3);
         else FillBar(&bar, step * 2 / 3, 0xC8);
     }
     WinSetCoordinateSystem(coordinates);

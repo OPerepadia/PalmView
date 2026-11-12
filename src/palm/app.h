@@ -32,7 +32,7 @@
 #define navChangeRight 0x0800
 #define navChangeSelect 0x1000
 /* Level 0 is silent. */
-#define VOLUME_LEVELS 11
+#define VOLUME_LEVELS 14
 #define VOLUME_DEFAULT 6
 #define NO_RESULT 0xFFFF
 /* The icon's red */
