@@ -58,6 +58,10 @@ Downloaded videos are stored in `/PalmView` on the card. Open **Downloads** from
 - Only H.264 and AAC codecs are supported. YouTube still serves its low-resolution streams in these codecs.
 - Live streams, "made for kids", age-restricted and members-only videos are not supported.
 
+## Troubleshooting
+
+- **`TLS failed 7/-150 (TLS)`**: the device's date is wrong. Set the current date and time in **Prefs**.
+
 ## How it works
 
 - **API.** PalmView identifies itself as the YouTube app for visionOS. YouTube gives this client direct stream URLs, so no JavaScript has to run on the Palm.
