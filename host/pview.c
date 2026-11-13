@@ -97,7 +97,7 @@ static UInt16 HttpsExchange(const char *hostP, const Char *requestP,
     sslP = SSL_new(ctxP);
     SSL_set_fd(sslP, fd);
     SSL_set_tlsext_host_name(sslP, hostP);
-    SSL_set1_host(sslP, hostP);
+    X509_VERIFY_PARAM_set1_host(SSL_get0_param(sslP), hostP, 0);
     if (SSL_connect(sslP) != 1 || SSL_write(sslP, requestP, length) != length) {
         ERR_print_errors_fp(stderr);
         goto done;
