@@ -284,8 +284,9 @@ static UInt32 CharForPalm(const TextCodec *codecP, const UInt8 *p,
     return codecP->encoding == textAscii ? 0 : CharForJis(codecP, code);
 }
 
-Boolean TextAppendJson(Char *dstP, UInt16 capacity, UInt16 *lengthP,
-                       const Char *srcP, const TextCodec *codecP)
+static Boolean AppendPalm(Char *dstP, UInt16 capacity, UInt16 *lengthP,
+                          const Char *srcP, const TextCodec *codecP,
+                          Boolean json)
 {
     static const Char hex[] = "0123456789abcdef";
     const UInt8 *p = (const UInt8 *)srcP;
@@ -294,10 +295,10 @@ Boolean TextAppendJson(Char *dstP, UInt16 capacity, UInt16 *lengthP,
         UInt8 c = *p;
         Boolean ok;
         size = codecP != 0 ? PalmCharSize(codecP->encoding, p) : 1;
-        if (c == '"' || c == '\\') {
+        if (json && (c == '"' || c == '\\')) {
             ok = PutChar(dstP, capacity, lengthP, '\\') &&
                 PutChar(dstP, capacity, lengthP, (Char)c);
-        } else if (c < 0x20) {
+        } else if (json && c < 0x20) {
             ok = TextAppend(dstP, capacity, lengthP, "\\u00") &&
                 PutChar(dstP, capacity, lengthP, hex[c >> 4]) &&
                 PutChar(dstP, capacity, lengthP, hex[c & 0x0F]);
@@ -310,6 +311,18 @@ Boolean TextAppendJson(Char *dstP, UInt16 capacity, UInt16 *lengthP,
         if (!ok) return false;
     }
     return true;
+}
+
+Boolean TextAppendJson(Char *dstP, UInt16 capacity, UInt16 *lengthP,
+                       const Char *srcP, const TextCodec *codecP)
+{
+    return AppendPalm(dstP, capacity, lengthP, srcP, codecP, true);
+}
+
+Boolean TextAppendUtf8(Char *dstP, UInt16 capacity, UInt16 *lengthP,
+                       const Char *srcP, const TextCodec *codecP)
+{
+    return AppendPalm(dstP, capacity, lengthP, srcP, codecP, false);
 }
 
 Boolean TextParseUInt32(const Char *textP, UInt32 *valueP)

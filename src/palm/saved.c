@@ -109,18 +109,12 @@ static void DrawSavedRow(AppState *s, UInt16 row)
 
 static void DrawSaved(AppState *s)
 {
-    static const Char kEmpty[] = "No downloads yet.";
     RectangleType bounds;
     UInt16 row;
     for (row = 0; row < s->savedRows; row++) DrawSavedRow(s, row);
     if (s->savedCount != 0) return;
     GetSavedBounds(&bounds);
-    WinPushDrawState();
-    FntSetFont(stdFont);
-    WinDrawChars(kEmpty, sizeof(kEmpty) - 1, bounds.topLeft.x +
-        (bounds.extent.x - FntCharsWidth(kEmpty, sizeof(kEmpty) - 1)) / 2,
-        bounds.topLeft.y + (s->savedRowHeight - FntLineHeight()) / 2);
-    WinPopDrawState();
+    DrawListMessage(&bounds, s->savedRowHeight, "No downloads yet.");
 }
 
 /* Keeps thumbnails only for the rows in view. */

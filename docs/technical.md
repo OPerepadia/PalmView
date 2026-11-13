@@ -23,11 +23,12 @@
 
 - `src/core/`: portable C for the Palm and the host. JSON scanning,
   YouTube requests and replies, MP4 merging and streaming, text encodings,
-  thumbnails.
+  thumbnails, bookmark records.
 - `src/palm/`: the app. `main.c` has the event loop, and each screen has its
-  own file (`results.c` for search and channels, `detail.c`, `player.c`,
-  `saved.c`), plus `net_job.c` (HTTPS), `stream_feed.c` (streaming),
-  `playback.c` (the player) and `download.c`.
+  own file (`results.c` for search, bookmarks and channels, `detail.c`,
+  `player.c`, `saved.c`), plus `bookmarks.c` (the bookmarks database),
+  `net_job.c` (HTTPS), `stream_feed.c` (streaming), `playback.c` (the
+  player) and `download.c`.
 - `src/arm/`: the native ARM modules. `decoder.c` wraps FFmpeg, `rgb.c`
   converts frames, `sound.c` holds the PCM ring and callback.
 - `src/bench/`: PalmView Bench.
@@ -272,6 +273,25 @@ Without a `log=` line nothing is sent.
 - YouTube serves the two streams as separate fragmented MP4 files.
   `src/core/mp4_merge.c` rebuilds them into one regular MP4, with the moov
   box first. Its packets match `ffmpeg -c copy` output exactly.
+
+### Bookmarks
+
+- Bookmarks live in a database in handheld memory, `PalmView Bookmarks`,
+  one record per video, newest first. HotSync backs it up, and deleting the
+  app deletes it too.
+- A record keeps the video's ID, title, channel, channel ID and length as
+  UTF-8 (`src/core/bookmark.c`), then the thumbnail's JPEG. Titles still
+  read right after CJKOS is turned on or off.
+- The thumbnail is saved with the bookmark if it was loaded, or later when
+  the list downloads it. It is written once and never replaced.
+- The bookmarks show 20 to a page, like search results. Their screen is
+  read without the network. Stored thumbnails are decoded one per pass of
+  the event loop, so the list stays responsive.
+- Missing thumbnails download only while PalmView has the network open,
+  after a search or a video's details. Bookmarks never connect on their
+  own, so no connection dialog shows.
+- A channel opened from a bookmarked video keeps the bookmarks in memory
+  under it, as the search results are kept under both.
 
 ### When YouTube changes
 

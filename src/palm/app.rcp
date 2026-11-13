@@ -16,7 +16,7 @@ MENUID MainMenuBar
 BEGIN
     TITLE "PalmView"
     POPUPTRIGGER "Home" ID MainScreenTrigger AT (RIGHT@159 1 AUTO 11) RIGHTANCHOR
-    LIST "Home" "Downloads" ID MainScreenList AT (RIGHT@159 1 52 AUTO) VISIBLEITEMS 2 NONUSABLE
+    LIST "Home" "Bookmarks" "Downloads" ID MainScreenList AT (RIGHT@159 1 52 AUTO) VISIBLEITEMS 3 NONUSABLE
     POPUPLIST ID MainScreenTrigger MainScreenList
     POPUPTRIGGER "" ID HistoryTrigger AT (0 17 12 12) LEFTANCHOR
     FIELD ID SearchField AT (14 17 106 12) EDITABLE UNDERLINED SINGLELINE MAXCHARS 63
@@ -63,11 +63,26 @@ BEGIN
     BUTTON "Back" ID ChannelBackButton AT (118 146 40 12)
 END
 
+FORM ID BookmarksForm AT (0 0 160 160) NOSAVEBEHIND
+BEGIN
+    TITLE "PalmView"
+    POPUPTRIGGER "Bookmarks" ID BookmarksScreenTrigger AT (RIGHT@159 1 AUTO 11) RIGHTANCHOR
+    LIST "Home" "Bookmarks" "Downloads" ID BookmarksScreenList AT (RIGHT@159 1 52 AUTO) VISIBLEITEMS 3 NONUSABLE
+    POPUPLIST ID BookmarksScreenTrigger BookmarksScreenList
+    GADGET ID ResultGadget AT (0 16 153 126)
+    SCROLLBAR ID ResultScrollBar AT (153 16 7 126) VALUE 0 MIN 0 MAX 0 PAGESIZE 3
+    FIELD ID StatusField AT (2 146 114 12) NONEDITABLE SINGLELINE MAXCHARS 79
+    BUTTON "\002" ID PagePrevButton AT (54 146 9 12) NOFRAME FONT 4 NONUSABLE
+    GADGET ID PageGadget AT (63 146 34 12) NONUSABLE
+    BUTTON "\003" ID PageNextButton AT (97 146 9 12) NOFRAME FONT 4 NONUSABLE
+    BUTTON "Back" ID BookmarksBackButton AT (118 146 40 12)
+END
+
 FORM ID SavedForm AT (0 0 160 160) NOSAVEBEHIND
 BEGIN
     TITLE "PalmView"
     POPUPTRIGGER "Downloads" ID SavedScreenTrigger AT (RIGHT@159 1 AUTO 11) RIGHTANCHOR
-    LIST "Home" "Downloads" ID SavedScreenList AT (RIGHT@159 1 52 AUTO) VISIBLEITEMS 2 NONUSABLE
+    LIST "Home" "Bookmarks" "Downloads" ID SavedScreenList AT (RIGHT@159 1 52 AUTO) VISIBLEITEMS 3 NONUSABLE
     POPUPLIST ID SavedScreenTrigger SavedScreenList
     GADGET ID SavedGadget AT (0 16 153 126)
     SCROLLBAR ID SavedScrollBar AT (153 16 7 126) VALUE 0 MIN 0 MAX 0 PAGESIZE 3

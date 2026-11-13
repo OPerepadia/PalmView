@@ -26,6 +26,8 @@ SECTIONS
         *player.o(.text .text.* .rodata .rodata.*)
         *saved.o(.text .text.* .rodata .rodata.*)
         *results.o(.text .text.* .rodata .rodata.*)
+        *bookmarks.o(.text .text.* .rodata .rodata.*)
+        *bookmark.o(.text .text.* .rodata .rodata.*)
         *tjpgd.o(.text .text.* .rodata .rodata.*)
         . = ALIGN(4);
     } > main2

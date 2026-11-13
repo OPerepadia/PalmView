@@ -5,6 +5,7 @@
 
 #include <PalmOS.h>
 
+#include "bookmarks.h"
 #include "resource.h"
 #include "results.h"
 #include "thumb.h"
@@ -90,6 +91,7 @@ void FreeThumbs(AppState *s)
         FreeBitmap(&thumbP->bitmapP, &thumbP->bitsP);
         MemSet(thumbP, sizeof(*thumbP), 0);
     }
+    s->storedThumbs = false;
     FreeBitmap(&s->detailThumbP, &s->detailBitsP);
 }
 
@@ -139,12 +141,12 @@ static void DrawThumb(const AppState *s)
     if (!OnForm(DetailForm)) return;
     formP = FrmGetActiveForm();
     FrmGetObjectBounds(formP, FrmGetObjectIndex(formP, ThumbGadget), &bounds);
-    if (s->detailThumbP != 0) {
+    if (s->detailThumbP != 0)
         WinDrawBitmap(s->detailThumbP, bounds.topLeft.x, bounds.topLeft.y);
-        return;
-    }
-    DrawThumbPlaceholder(&bounds, false,
-        s->searchP->items[s->selected].length);
+    else
+        DrawThumbPlaceholder(&bounds, false,
+            s->searchP->items[s->selected].length);
+    DrawBookmarkStar(s, false);
 }
 
 /* The selected video's thumbnail at full size, from the list's JPEG */
@@ -156,19 +158,18 @@ void ShowDetailThumb(AppState *s)
     DrawThumb(s);
 }
 
-/* The thumbnail the screen needs next: the selected video's on the details
- * screen, otherwise the results in view first. */
-static UInt16 NextThumb(const AppState *s)
+/* The thumbnail in state the screen needs next: the selected video's on
+ * the details screen, otherwise the results in view first. */
+static UInt16 NextThumb(const AppState *s, UInt8 state)
 {
     UInt16 count = s->searchP->count, i;
     if (OnForm(DetailForm))
-        return s->thumbs[s->selected].state == thumbMissing
-            ? s->selected : NO_RESULT;
+        return s->thumbs[s->selected].state == state ? s->selected : NO_RESULT;
     if (!OnListForm()) return NO_RESULT;
     for (i = s->resultTop; i < s->resultTop + s->resultRows && i < count; i++)
-        if (s->thumbs[i].state == thumbMissing) return i;
+        if (s->thumbs[i].state == state) return i;
     for (i = 0; i < count; i++)
-        if (s->thumbs[i].state == thumbMissing) return i;
+        if (s->thumbs[i].state == state) return i;
     return NO_RESULT;
 }
 
@@ -194,7 +195,7 @@ static Boolean RequestThumb(AppState *s, UInt16 item)
  * a thumbnail. */
 void StartThumbs(AppState *s)
 {
-    UInt16 item = NextThumb(s);
+    UInt16 item = NextThumb(s, thumbMissing);
     if (s->task != taskIdle || !NetworkOpen(s)) return;
     if (item == NO_RESULT) {
         StopThumbs(s);
@@ -210,14 +211,14 @@ void StartThumbs(AppState *s)
     StopThumbs(s);
 }
 
-/* Keeps the downloaded thumbnail and shows it where it belongs. */
-static void StoreThumb(AppState *s, UInt16 item)
+/* Keeps a thumbnail's JPEG, which it takes over, and shows it where it
+ * belongs. */
+static void KeepThumb(AppState *s, UInt16 item, UInt8 *jpegP, UInt16 length)
 {
     Thumb *thumbP = &s->thumbs[item];
-    thumbP->jpegP = (UInt8 *)MemPtrNew(s->thumbLength);
-    if (thumbP->jpegP != 0) {
-        MemMove(thumbP->jpegP, s->thumbBufferP, s->thumbLength);
-        thumbP->length = s->thumbLength;
+    thumbP->jpegP = jpegP;
+    if (jpegP != 0) {
+        thumbP->length = length;
         thumbP->bitmapP = DecodeThumb(s, thumbP, true,
             s->searchP->items[item].length, &thumbP->bitsP);
     }
@@ -232,6 +233,51 @@ static void StoreThumb(AppState *s, UInt16 item)
             (UInt16)(item - s->resultTop) < s->resultRows)
         DrawResultRow(s, item - s->resultTop);
     if (OnForm(DetailForm) && item == s->selected) ShowDetailThumb(s);
+}
+
+/* Keeps a downloaded thumbnail. A bookmark that has none gets it. */
+static void StoreThumb(AppState *s, UInt16 item)
+{
+    UInt8 *jpegP = (UInt8 *)MemPtrNew(s->thumbLength);
+    if (jpegP != 0) MemMove(jpegP, s->thumbBufferP, s->thumbLength);
+    KeepThumb(s, item, jpegP, s->thumbLength);
+    if (s->thumbs[item].state == thumbLoaded && (s->bookmarks ||
+            (OnForm(DetailForm) && s->bookmarked && item == s->selected)))
+        SaveBookmarkThumb(s->searchP->items[item].videoId, jpegP,
+            s->thumbLength);
+}
+
+/* The details screen waits only for its own, or the event loop would wake
+ * every tick while it is up. */
+Boolean HasStoredThumbs(const AppState *s)
+{
+    if (!s->storedThumbs) return false;
+    if (OnForm(DetailForm)) return s->thumbs[s->selected].state == thumbStored;
+    return OnListForm();
+}
+
+/* Decodes one thumbnail kept with the bookmarks per call, so the list
+ * stays responsive. Like downloaded ones, they wait while the list is in
+ * use. */
+void LoadStoredThumb(AppState *s)
+{
+    UInt16 item, length;
+    UInt8 *jpegP;
+    if (!HasStoredThumbs(s) ||
+            TimGetTicks() - s->lastInputTicks < SysTicksPerSecond() / 2)
+        return;
+    item = NextThumb(s, thumbStored);
+    if (item == NO_RESULT) {
+        s->storedThumbs = false;
+        return;
+    }
+    jpegP = ReadBookmarkThumb(s->searchP->items[item].videoId, &length);
+    if (jpegP == 0) {
+        s->thumbs[item].state = thumbMissing;
+        StartThumbs(s);
+        return;
+    }
+    KeepThumb(s, item, jpegP, length);
 }
 
 void SaveThumbBeside(AppState *s, UInt16 item, const Char *videoPathP)
@@ -280,7 +326,7 @@ void ThumbArrived(AppState *s)
     UInt16 next;
     StoreThumb(s, s->thumbItem);
     s->thumbItem = NO_RESULT;
-    next = NextThumb(s);
+    next = NextThumb(s, thumbMissing);
     if (next == NO_RESULT || !RequestThumb(s, next)) {
         s->thumbItem = NO_RESULT;
         NetJobCancel(s->jobP);

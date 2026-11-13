@@ -1,11 +1,13 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
-/* The lists of videos: the search results on MainForm, and a channel's on
- * ChannelForm. Both share the drawing, the page selector and the status
- * line, with the same object IDs on both forms. */
+/* The lists of videos: the search results on MainForm, the bookmarks on
+ * BookmarksForm, and a channel's on ChannelForm. They share the drawing,
+ * the page selector and the status line, with the same object IDs on each
+ * form. */
 
 #include <PalmOS.h>
 
+#include "bookmarks.h"
 #include "download.h"
 #include "resource.h"
 #include "results.h"
@@ -19,7 +21,8 @@
 #define STATUS_WIDTH 140
 #define STATUS_PAGER_WIDTH 90
 /* A channel's screen has no search row, so its list starts right under the
- * title. Back shares the row with the status line. */
+ * title. Back shares the row with the status line. The bookmarks' screen
+ * is laid out the same. */
 #define CHANNEL_TOP 16
 #define CHANNEL_BOTTOM 18
 #define CHANNEL_ROW_BOTTOM 14
@@ -47,8 +50,16 @@ static void DrawPageNumber(const AppState *s)
     FntSetFont(font);
 }
 
+/* The channel's and the bookmarks' screens, which have a Back button */
+static Boolean HasBackButton(void)
+{
+    return OnForm(ChannelForm) || OnForm(BookmarksForm);
+}
+
 static Boolean HasNextPage(const AppState *s)
 {
+    if (s->bookmarks)
+        return (UInt16)(s->page + 1) * YT_SEARCH_MAX < s->bookmarkCount;
     if (s->channelId[0] == '\0') return s->searchP->nextP[0] != '\0';
     /* The first half of a reply leads to its second half. */
     if ((s->page & 1) == 0 && s->searchP->more) return true;
@@ -68,7 +79,7 @@ void ShowPager(AppState *s)
     ControlType *nextP = (ControlType *)GetObject(PageNextButton);
     Boolean hasPrev = s->page != 0, hasNext = HasNextPage(s);
     Boolean visible = s->paged && !s->pagerHidden;
-    Coord width = OnForm(ChannelForm)
+    Coord width = HasBackButton()
         ? (visible ? CHANNEL_STATUS_PAGER_WIDTH : CHANNEL_STATUS_WIDTH)
         : (visible ? STATUS_PAGER_WIDTH : STATUS_WIDTH);
     RectangleType bounds;
@@ -103,7 +114,7 @@ void SetStatus(AppState *s, const Char *textP)
     if (!OnListForm()) return;
     font = FntSetFont(stdFont);
     s->pagerHidden = FntCharsWidth(s->status, (Int16)StrLen(s->status)) >
-        (OnForm(ChannelForm) ? CHANNEL_STATUS_PAGER_WIDTH : STATUS_PAGER_WIDTH);
+        (HasBackButton() ? CHANNEL_STATUS_PAGER_WIDTH : STATUS_PAGER_WIDTH);
     FntSetFont(font);
     ShowPager(s);
     SetFieldText(StatusField, s->status);
@@ -205,10 +216,28 @@ void DrawResultRow(const AppState *s, UInt16 row)
         s->thumbs[item].bitmapP, item == s->resultFocus);
 }
 
+void DrawListMessage(const RectangleType *listP, Coord rowHeight,
+                     const Char *textP)
+{
+    Int16 length = (Int16)StrLen(textP);
+    WinPushDrawState();
+    FntSetFont(stdFont);
+    WinDrawChars(textP, length, listP->topLeft.x +
+        (listP->extent.x - FntCharsWidth(textP, length)) / 2,
+        listP->topLeft.y + (rowHeight - FntLineHeight()) / 2);
+    WinPopDrawState();
+}
+
 static void DrawResults(const AppState *s)
 {
+    RectangleType bounds;
     UInt16 row;
     for (row = 0; row < s->resultRows; row++) DrawResultRow(s, row);
+    if (s->searchP->count != 0 || !s->listLoaded) return;
+    GetResultBounds(&bounds);
+    DrawListMessage(&bounds, s->resultRowHeight,
+        s->bookmarks ? "No bookmarks yet."
+        : s->page == 0 ? "No results." : "No more results.");
 }
 
 void ShowResults(AppState *s, Boolean draw)
@@ -328,6 +357,40 @@ static UInt16 BuildChannelPage(AppState *s, UInt16 page)
     return length;
 }
 
+/* A page of bookmarks, read without the network. After a bookmark was
+ * removed, the same page keeps its place in the list where it can. */
+static void LoadBookmarks(AppState *s, UInt16 page)
+{
+    Char message[24];
+    UInt16 count, last;
+    FreeThumbs(s);
+    s->bookmarkCount = BookmarkCount();
+    last = s->bookmarkCount != 0 ? (s->bookmarkCount - 1) / YT_SEARCH_MAX : 0;
+    if (page > last) page = last;
+    if (page != s->page) {
+        s->resultTop = 0;
+        if (s->resultFocus != NO_RESULT) s->resultFocus = 0;
+    }
+    s->page = page;
+    YtSearchInit(s->searchP, &s->codec);
+    ReadBookmarks(s, page * YT_SEARCH_MAX);
+    count = s->searchP->count;
+    if (s->resultFocus != NO_RESULT && s->resultFocus >= count)
+        s->resultFocus = count != 0 ? count - 1 : NO_RESULT;
+    s->paged = s->bookmarkCount > YT_SEARCH_MAX;
+    s->bookmarksChanged = false;
+    s->listLoaded = true;
+    message[0] = '\0';
+    if (s->bookmarkCount != 0) {
+        AppendNumber(message, sizeof(message), s->bookmarkCount);
+        Append(message, sizeof(message),
+            s->bookmarkCount == 1 ? " item" : " items");
+    }
+    SetStatus(s, message);
+    ShowResults(s, true);
+    StartThumbs(s);
+}
+
 /* Loads a page of the results, 0 being the first. A channel's pages take
  * turns as the two halves of its replies. */
 void LoadPage(AppState *s, UInt16 page)
@@ -337,6 +400,10 @@ void LoadPage(AppState *s, UInt16 page)
     UInt16 length;
     StopThumbs(s);
     if (s->task != taskIdle) return;
+    if (s->bookmarks) {
+        LoadBookmarks(s, page);
+        return;
+    }
     FreeThumbs(s);
     if (channel || page != 0) {
         s->pageBuffersP = (PageBuffers *)MemPtrNew(sizeof(PageBuffers));
@@ -372,6 +439,7 @@ void LoadPage(AppState *s, UInt16 page)
     s->page = page;
     s->resultTop = 0;
     if (s->resultFocus != NO_RESULT) s->resultFocus = 0;
+    s->listLoaded = false;
     SetStatus(s, "Loading...");
     if (!StartApiRequest(s, taskSearch, requestP, length))
         FreePageBuffers(s);
@@ -385,7 +453,8 @@ void NextPage(AppState *s)
     UInt16 page = s->page + 1;
     StopThumbs(s);
     if (s->task != taskIdle || !HasNextPage(s)) return;
-    if (!channel || (s->page & 1) != 0 || !s->searchP->more) {
+    if (!s->bookmarks &&
+            (!channel || (s->page & 1) != 0 || !s->searchP->more)) {
         UInt16 kept = channel ? s->page / 2 : s->page;
         if (!KeepTokens(s, kept, s->searchP->nextP)) {
             SetStatus(s, "Out of memory.");
@@ -515,19 +584,22 @@ void LayoutMainForm(AppState *s)
     ShowResults(s, false);
 }
 
+static void InitListGadgets(AppState *s)
+{
+    FormType *formP = FrmGetActiveForm();
+    UInt16 index = FrmGetObjectIndex(formP, ResultGadget);
+    FrmSetGadgetData(formP, index, s);
+    FrmSetGadgetHandler(formP, index, ResultGadgetHandler);
+    index = FrmGetObjectIndex(formP, PageGadget);
+    FrmSetGadgetData(formP, index, s);
+    FrmSetGadgetHandler(formP, index, PageGadgetHandler);
+}
+
 void InitMainForm(AppState *s)
 {
     FieldType *fieldP = (FieldType *)GetObject(SearchField);
     FldSetTextHandle(fieldP, s->searchTextH);
-    {
-        FormType *formP = FrmGetActiveForm();
-        UInt16 index = FrmGetObjectIndex(formP, ResultGadget);
-        FrmSetGadgetData(formP, index, s);
-        FrmSetGadgetHandler(formP, index, ResultGadgetHandler);
-        index = FrmGetObjectIndex(formP, PageGadget);
-        FrmSetGadgetData(formP, index, s);
-        FrmSetGadgetHandler(formP, index, PageGadgetHandler);
-    }
+    InitListGadgets(s);
     LstSetSelection((ListType *)GetObject(MainScreenList), screenHome);
     ShowResults(s, false);
     FldSetTextPtr((FieldType *)GetObject(StatusField), s->status);
@@ -568,23 +640,25 @@ UInt16 ShowHistory(AppState *s)
 
 void InitChannelForm(AppState *s)
 {
-    FormType *formP = FrmGetActiveForm();
-    UInt16 index = FrmGetObjectIndex(formP, ResultGadget);
-    FrmSetGadgetData(formP, index, s);
-    FrmSetGadgetHandler(formP, index, ResultGadgetHandler);
-    index = FrmGetObjectIndex(formP, PageGadget);
-    FrmSetGadgetData(formP, index, s);
-    FrmSetGadgetHandler(formP, index, PageGadgetHandler);
-    FrmSetTitle(formP, s->channelTitle);
+    InitListGadgets(s);
+    FrmSetTitle(FrmGetActiveForm(), s->channelTitle);
     FldSetTextPtr((FieldType *)GetObject(StatusField), s->status);
     ShowResults(s, false);
 }
 
-void LayoutChannelForm(AppState *s)
+void InitBookmarksForm(AppState *s)
+{
+    InitListGadgets(s);
+    LstSetSelection((ListType *)GetObject(BookmarksScreenList),
+        screenBookmarks);
+    FldSetTextPtr((FieldType *)GetObject(StatusField), s->status);
+    ShowResults(s, false);
+}
+
+static void LayoutBackForm(AppState *s, UInt16 backId)
 {
     static const UInt16 kRowIds[] = {
-        StatusField, PagePrevButton, PageGadget, PageNextButton,
-        ChannelBackButton
+        StatusField, PagePrevButton, PageGadget, PageNextButton
     };
     FormType *formP = FrmGetActiveForm();
     RectangleType bounds;
@@ -605,7 +679,19 @@ void LayoutChannelForm(AppState *s)
     for (i = 0; i < sizeof(kRowIds) / sizeof(kRowIds[0]); i++)
         SetObjectY(formP, FrmGetObjectIndex(formP, kRowIds[i]),
             height - CHANNEL_ROW_BOTTOM, 0);
+    SetObjectY(formP, FrmGetObjectIndex(formP, backId),
+        height - CHANNEL_ROW_BOTTOM, 0);
     ShowResults(s, false);
+}
+
+void LayoutChannelForm(AppState *s)
+{
+    LayoutBackForm(s, ChannelBackButton);
+}
+
+void LayoutBookmarksForm(AppState *s)
+{
+    LayoutBackForm(s, BookmarksBackButton);
 }
 
 void StartSearch(AppState *s)
@@ -635,7 +721,7 @@ void FinishSearch(AppState *s)
     } else if (!ok) {
         DescribeFailure(s, message, sizeof(message));
     } else if (s->searchP->count == 0) {
-        StrCopy(message, s->page == 0 ? "No results." : "No more results.");
+        /* The list says so. */
     } else if (s->channelId[0] != '\0') {
         AppendNumber(message, sizeof(message), s->searchP->count);
         Append(message, sizeof(message), " videos");
@@ -646,6 +732,7 @@ void FinishSearch(AppState *s)
             TimGetTicks() - s->taskStartTicks);
     }
     if (ok) SaveVisitor(s, s->searchP->visitor);
+    s->listLoaded = ok;
     SetStatus(s, message);
     if (OnListForm()) ShowResults(s, true);
     if (ok) StartThumbs(s);
@@ -663,28 +750,84 @@ static void StopJob(AppState *s)
     FreeBitmap(&s->detailThumbP, &s->detailBitsP);
 }
 
+/* Back to the list the details screen was opened from. The bookmarks
+ * are read again if they changed meanwhile. */
 void ReturnToList(AppState *s)
 {
-    Boolean channel = s->channelId[0] != '\0';
+    UInt16 formId = s->channelId[0] != '\0' ? ChannelForm
+        : s->bookmarks ? BookmarksForm : MainForm;
     StopJob(s);
-    FrmReturnToForm(channel ? ChannelForm : MainForm);
-    if (channel) LayoutChannelForm(s);
+    FrmReturnToForm(formId);
+    if (formId == ChannelForm) LayoutChannelForm(s);
+    else if (formId == BookmarksForm) LayoutBookmarksForm(s);
     else LayoutMainForm(s);
     FrmDrawForm(FrmGetActiveForm());
+    if (s->bookmarks && s->bookmarksChanged) {
+        LoadBookmarks(s, s->page);
+        return;
+    }
     ShowResults(s, true);
     StartThumbs(s);
 }
 
-/* Opens the selected video's channel on its own screen. The search results
- * wait in memory, without their thumbnails. */
+/* Puts the list on screen aside, under searchP's. */
+static void PushList(AppState *s, YtSearch *searchP)
+{
+    ListState *listP = &s->lists[s->listDepth++];
+    listP->searchP = s->searchP;
+    listP->tokensH = s->tokensH;
+    listP->page = s->page;
+    listP->top = s->resultTop;
+    listP->focus = s->resultFocus;
+    listP->paged = s->paged;
+    listP->bookmarks = s->bookmarks;
+    listP->loaded = s->listLoaded;
+    StrCopy(listP->status, s->status);
+    YtSearchInit(searchP, &s->codec);
+    s->searchP = searchP;
+    s->tokensH = 0;
+    s->page = 0;
+    s->resultTop = 0;
+    s->resultFocus = NO_RESULT;
+    s->paged = false;
+    s->pagerHidden = false;
+    s->bookmarks = false;
+    s->listLoaded = false;
+    s->status[0] = '\0';
+}
+
+/* Frees the list on screen for the one put aside under it. */
+static void PopList(AppState *s)
+{
+    ListState *listP = &s->lists[--s->listDepth];
+    ForgetTokens(s);
+    MemPtrFree(s->searchP);
+    s->searchP = listP->searchP;
+    listP->searchP = 0;
+    s->tokensH = listP->tokensH;
+    listP->tokensH = 0;
+    s->page = listP->page;
+    s->resultTop = listP->top;
+    s->resultFocus = listP->focus;
+    s->paged = listP->paged;
+    s->bookmarks = listP->bookmarks;
+    s->listLoaded = listP->loaded;
+    s->pagerHidden = false;
+    StrCopy(s->status, listP->status);
+}
+
+/* Opens the selected video's channel on its own screen. The list it was
+ * opened from waits in memory, without its thumbnails. */
 void OpenChannel(AppState *s)
 {
     static const Char kChannelSuffix[] = " - Videos";
     const YtSearchItem *itemP = &s->searchP->items[s->selected];
-    ListState *listP = &s->searchList;
+    UInt16 listForm = s->bookmarks ? BookmarksForm : MainForm;
     YtSearch *channelP;
     FontID font;
-    if (s->task == taskDownload || s->channelId[0] != '\0') return;
+    if (s->task == taskDownload || s->channelId[0] != '\0' ||
+            s->listDepth == LIST_DEPTH)
+        return;
     channelP = (YtSearch *)MemPtrNew(sizeof(YtSearch));
     s->channelNextP = (Char *)MemPtrNew(YT_CHANNEL_TOKEN_CAPACITY);
     if (channelP == 0 || s->channelNextP == 0) {
@@ -703,50 +846,52 @@ void OpenChannel(AppState *s)
         FntCharsWidth(kChannelSuffix, sizeof(kChannelSuffix) - 1));
     FntSetFont(font);
     Append(s->channelTitle, sizeof(s->channelTitle), kChannelSuffix);
-    listP->searchP = s->searchP;
-    listP->tokensH = s->tokensH;
-    listP->page = s->page;
-    listP->top = s->resultTop;
-    listP->focus = s->resultFocus;
-    listP->paged = s->paged;
-    StrCopy(listP->status, s->status);
-    YtSearchInit(channelP, &s->codec);
-    s->searchP = channelP;
-    s->tokensH = 0;
-    s->page = 0;
-    s->resultTop = 0;
-    s->resultFocus = NO_RESULT;
-    s->paged = false;
-    s->pagerHidden = false;
-    s->status[0] = '\0';
-    /* Closing the details form shows the search screen. Locked, it is not
+    PushList(s, channelP);
+    /* Closing the details form shows the list under it. Locked, it is not
      * seen. Deleting the form later instead left too little memory to play. */
     s->screenLocked = WinScreenLock(winLockCopy) != 0;
-    FrmReturnToForm(MainForm);
+    FrmReturnToForm(listForm);
     FrmPopupForm(ChannelForm);
 }
 
 void CloseChannel(AppState *s)
 {
-    ListState *listP = &s->searchList;
     StopJob(s);
     FreeThumbs(s);
     FreePageBuffers(s);
-    ForgetTokens(s);
     MemPtrFree(s->channelNextP);
     s->channelNextP = 0;
-    MemPtrFree(s->searchP);
-    s->searchP = listP->searchP;
-    listP->searchP = 0;
-    s->tokensH = listP->tokensH;
-    listP->tokensH = 0;
-    s->page = listP->page;
-    s->resultTop = listP->top;
-    s->resultFocus = listP->focus;
-    s->paged = listP->paged;
-    s->pagerHidden = false;
-    StrCopy(s->status, listP->status);
+    PopList(s);
     s->channelId[0] = '\0';
+    /* Read again for the thumbnails stored with them */
+    if (s->bookmarks) s->bookmarksChanged = true;
+    ReturnToList(s);
+}
+
+/* Opens the bookmarks on their own screen, over the search results. */
+Boolean OpenBookmarks(AppState *s)
+{
+    YtSearch *searchP;
+    StopThumbs(s);
+    if (s->task != taskIdle || s->listDepth != 0) return false;
+    searchP = (YtSearch *)MemPtrNew(sizeof(YtSearch));
+    if (searchP == 0) {
+        SetStatus(s, "Out of memory.");
+        return false;
+    }
+    FreeThumbs(s);
+    PushList(s, searchP);
+    s->bookmarks = true;
+    FrmPopupForm(BookmarksForm);
+    return true;
+}
+
+/* Back to the search results */
+void CloseBookmarks(AppState *s)
+{
+    StopJob(s);
+    FreeThumbs(s);
+    PopList(s);
     ReturnToList(s);
 }
 
@@ -755,6 +900,9 @@ void FreeResults(AppState *s)
     ForgetTokens(s);
     FreePageBuffers(s);
     if (s->channelNextP != 0) MemPtrFree(s->channelNextP);
-    if (s->searchList.searchP != 0) MemPtrFree(s->searchList.searchP);
-    if (s->searchList.tokensH != 0) MemHandleFree(s->searchList.tokensH);
+    while (s->listDepth > 0) {
+        ListState *listP = &s->lists[--s->listDepth];
+        if (listP->searchP != 0) MemPtrFree(listP->searchP);
+        if (listP->tokensH != 0) MemHandleFree(listP->tokensH);
+    }
 }

@@ -39,7 +39,7 @@
 #define ACCENT_COLOR { 0, 0xC4, 0x30, 0x2B }
 
 /* The screens in the title bar's dropdown, in its order */
-enum { screenHome = 0, screenDownloads };
+enum { screenHome = 0, screenBookmarks, screenDownloads };
 
 /* Video qualities, in the order of their itags */
 enum { quality144 = 0, quality240 };
@@ -65,7 +65,8 @@ typedef struct Thumb {
     BitmapType *bitmapP;        /* the same, drawn at double density */
 } Thumb;
 
-enum { thumbMissing = 0, thumbLoaded, thumbFailed };
+/* thumbStored: in the bookmark's record, not read yet */
+enum { thumbMissing = 0, thumbLoaded, thumbFailed, thumbStored };
 
 /* A Downloads row, read when it comes into view */
 typedef struct SavedEntry {
@@ -86,7 +87,10 @@ typedef struct PageBuffers {
     Char request[YT_PAGE_REQUEST_CAPACITY];
 } PageBuffers;
 
-/* The search results while a channel's screen is up, without thumbnails */
+/* A list put aside while another covers it, without thumbnails: the search
+ * results under the bookmarks or a channel, and the bookmarks under a
+ * channel */
+#define LIST_DEPTH 2
 typedef struct ListState {
     YtSearch *searchP;
     MemHandle tokensH;
@@ -94,6 +98,8 @@ typedef struct ListState {
     UInt16 top;
     UInt16 focus;
     Boolean paged;
+    Boolean bookmarks;
+    Boolean loaded;
     Char status[80];
 } ListState;
 
@@ -127,8 +133,13 @@ typedef struct AppState {
     Char channelTitle[44];      /* the name, cut to fit, and " - Videos" */
     Char *channelNextP;         /* the next reply's token, on its screen */
     PageBuffers *pageBuffersP;
-    ListState searchList;
+    ListState lists[LIST_DEPTH];
+    UInt16 listDepth;
+    Boolean bookmarks;          /* the list is the bookmarks */
+    UInt16 bookmarkCount;       /* while it is */
+    Boolean bookmarksChanged;   /* since the bookmarks list was read */
     UInt16 page;                /* of results shown, 0 for the first */
+    Boolean listLoaded;         /* the page shown arrived, so empty means none */
     /* Search: tokens of pages 1 to page. Channel: of replies 1 onward. */
     MemHandle tokensH;
     Boolean paged;              /* the list has other pages */
@@ -154,6 +165,7 @@ typedef struct AppState {
     UInt8 *thumbBufferP;        /* while thumbnails download */
     UInt16 thumbLength;
     UInt16 thumbItem;           /* the one downloading, or NO_RESULT */
+    Boolean storedThumbs;       /* a bookmark's thumbnail is still to load */
     BitmapType *detailBitsP;    /* the selected video's, full size */
     BitmapType *detailThumbP;
     ArmModule thumbModule;      /* decodes the thumbnails */
@@ -182,6 +194,7 @@ typedef struct AppState {
     UInt16 percent;
     UInt16 quality;             /* chosen for the selected video */
     Boolean saved;              /* the selected video is on the card */
+    Boolean bookmarked;
     UInt16 savedQuality;
     UInt32 savedSize;
 

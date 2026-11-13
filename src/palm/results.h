@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
-/* The lists of videos: the search results on MainForm, and a channel's on
- * ChannelForm. */
+/* The lists of videos: the search results on MainForm, the bookmarks on
+ * BookmarksForm, and a channel's on ChannelForm. */
 
 #ifndef PALMVIEW_RESULTS_H
 #define PALMVIEW_RESULTS_H
@@ -21,6 +21,8 @@ void DrawListRow(const RectangleType *rowP, const Char *titleP,
                  const Char *detailsP, const Char *durationP,
                  BitmapType *bitmapP, Boolean focused);
 void DrawResultRow(const AppState *s, UInt16 row);
+void DrawListMessage(const RectangleType *listP, Coord rowHeight,
+                     const Char *textP);
 void FitResultRows(Coord listHeight, UInt16 *rowsP, Coord *rowHeightP);
 void ShowResults(AppState *s, Boolean draw);
 void ScrollResults(AppState *s, Int16 rows);
@@ -43,6 +45,11 @@ void InitChannelForm(AppState *s);
 void LayoutChannelForm(AppState *s);
 void OpenChannel(AppState *s);
 void CloseChannel(AppState *s);
+
+void InitBookmarksForm(AppState *s);
+void LayoutBookmarksForm(AppState *s);
+Boolean OpenBookmarks(AppState *s);
+void CloseBookmarks(AppState *s);
 
 void ReturnToList(AppState *s);
 void FreeResults(AppState *s);

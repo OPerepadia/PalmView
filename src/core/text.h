@@ -29,6 +29,9 @@ UInt16 TextUtf8ToPalm(const Char *srcP, UInt16 srcLength, Char *dstP,
  * if it does not fit. */
 Boolean TextAppendJson(Char *dstP, UInt16 capacity, UInt16 *lengthP,
                        const Char *srcP, const TextCodec *codecP);
+/* The same without escaping */
+Boolean TextAppendUtf8(Char *dstP, UInt16 capacity, UInt16 *lengthP,
+                       const Char *srcP, const TextCodec *codecP);
 
 /* The start of the character at or before offset, so a cut there does not
  * split a Japanese character. */

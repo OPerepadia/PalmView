@@ -38,8 +38,11 @@ Download both files from the [latest release](https://github.com/OPerepadia/Palm
     - **Play**: streams the video in a built-in player
     - **Download**: saves it to the SD card
 4. To browse the channel, tap its name on the **Video Details** screen.
+5. To bookmark a video, tap the star in the corner of its thumbnail. Tap it again to remove the bookmark.
 
 Downloaded videos are stored in `/PalmView` on the card. Open **Downloads** from the menu at the top right to play saved videos.
+
+Open **Bookmarks** from the same menu to see bookmarked videos, newest first.
 
 ### Playback controls
 

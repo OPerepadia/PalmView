@@ -60,6 +60,11 @@
 #define ChannelForm 1800
 #define ChannelBackButton 1801
 
+#define BookmarksForm 1900
+#define BookmarksScreenTrigger 1901
+#define BookmarksScreenList 1902
+#define BookmarksBackButton 1903
+
 #define AboutForm 1700
 #define AboutOkButton 1701
 #define AboutLogo 1702

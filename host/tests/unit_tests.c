@@ -3,6 +3,7 @@
 #include <PalmOS.h>
 #include <glob.h>
 #include <stdlib.h>
+#include "bookmark.h"
 #include "text.h"
 #include "thumb.h"
 #include "yt_api.h"
@@ -617,6 +618,68 @@ static void TestDetailBadge(void)
     Expect("detail badge drawn", fullChanged > 0 && fullChanged == listChanged);
 }
 
+static void TestBookmarks(void)
+{
+    YtSearchItem item, back;
+    Char record[BOOKMARK_CAPACITY];
+    UInt16 length, i;
+    MemSet(&item, sizeof(item), 0);
+    StrCopy(item.videoId, "dQw4w9WgXcQ");
+    StrCopy(item.title, "Caf\xE9 \x93quoted\x94");
+    StrCopy(item.channel, "Channel");
+    StrCopy(item.channelId, "UCuAXFkgsw1L7xaCfnd5JJOw");
+    StrCopy(item.length, "3:33");
+    StrCopy(item.views, "1.8B views");
+    item.live = true;
+    length = BookmarkPack(&item, &kWestern, record, sizeof(record));
+    Expect("bookmark packs", length != 0);
+    Expect("bookmark is utf-8", memcmp(record + 13, "Caf\xC3\xA9 \xE2\x80\x9C",
+        9) == 0);
+    ExpectText("bookmark video id", BookmarkVideoId(record, length),
+        "dQw4w9WgXcQ");
+    Expect("bookmark unpacks",
+        BookmarkUnpack(record, length, &kWestern, &back));
+    ExpectText("bookmark title", back.title, item.title);
+    ExpectText("bookmark channel", back.channel, item.channel);
+    ExpectText("bookmark channel id", back.channelId, item.channelId);
+    ExpectText("bookmark length", back.length, item.length);
+    Expect("bookmark drops the rest", back.views[0] == '\0' && !back.live);
+    {
+        UInt16 thumbLength = 1;
+        Expect("bookmark without thumbnail",
+            BookmarkThumb(record, length, &thumbLength) == 0 &&
+            thumbLength == 0);
+        /* A JPEG after the text, which may hold NULs */
+        memcpy(record + length, "\xFF\xD8\0\xFF\xD9", 5);
+        Expect("bookmark thumbnail",
+            BookmarkThumb(record, length + 5, &thumbLength) ==
+            (const UInt8 *)record + length && thumbLength == 5);
+        Expect("bookmark with thumbnail unpacks",
+            BookmarkUnpack(record, length + 5, &kWestern, &back) &&
+            strcmp(back.title, item.title) == 0);
+    }
+
+    /* Every cut short of the whole record is refused. */
+    for (i = 0; i < length; i++)
+        Expect("bookmark cut", !BookmarkUnpack(record, i, &kWestern, &back) &&
+            BookmarkVideoId(record, i) == 0);
+    record[0] = BOOKMARK_VERSION + 1;
+    Expect("bookmark version", !BookmarkUnpack(record, length, &kWestern,
+        &back));
+    Expect("bookmark too small", BookmarkPack(&item, &kWestern, record, 30) == 0);
+    item.videoId[0] = '\0';
+    length = BookmarkPack(&item, &kWestern, record, sizeof(record));
+    Expect("bookmark needs a video id", length != 0 &&
+        !BookmarkUnpack(record, length, &kWestern, &back));
+
+    /* The longest titles and channels still fit, three bytes a character. */
+    MemSet(item.title, sizeof(item.title) - 1, 0x80);
+    MemSet(item.channel, sizeof(item.channel) - 1, 0x80);
+    StrCopy(item.videoId, "dQw4w9WgXcQ");
+    Expect("bookmark capacity",
+        BookmarkPack(&item, &kWestern, record, sizeof(record)) != 0);
+}
+
 int main(void)
 {
     TestUtf8ToPalm();
@@ -635,6 +698,7 @@ int main(void)
     TestThumbnails();
     TestThumbBadge();
     TestDetailBadge();
+    TestBookmarks();
     if (gFailures != 0) {
         printf("%d unit test(s) failed\n", gFailures);
         return 1;

@@ -18,6 +18,8 @@ void ShowDetailThumb(AppState *s);
 void DrawThumbPlaceholder(const RectangleType *boundsP, Boolean list,
                           const Char *durationP);
 void StartThumbs(AppState *s);
+Boolean HasStoredThumbs(const AppState *s);
+void LoadStoredThumb(AppState *s);
 /* Saves a result's thumbnail beside its video; nothing if not loaded. */
 void SaveThumbBeside(AppState *s, UInt16 item, const Char *videoPathP);
 /* That thumbnail decoded for the list, or 0. *bitsPP holds its pixels. */

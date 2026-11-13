@@ -7,6 +7,7 @@
 #include <PenInputMgr.h>
 
 #include "app.h"
+#include "bookmarks.h"
 #include "detail.h"
 #include "download.h"
 #include "palm_tls.h"
@@ -41,7 +42,7 @@ Boolean OnForm(UInt16 formId)
 
 Boolean OnListForm(void)
 {
-    return OnForm(MainForm) || OnForm(ChannelForm);
+    return OnForm(MainForm) || OnForm(ChannelForm) || OnForm(BookmarksForm);
 }
 
 /* Copies srcP as it fits width in the current font, cut with "..." */
@@ -468,8 +469,8 @@ static void EnterInputArea(void)
 static Boolean IsWholeScreenForm(UInt16 formId)
 {
     return formId == MainForm || formId == ChannelForm ||
-        formId == DetailForm || formId == SavedForm ||
-        formId == PlayForm;
+        formId == BookmarksForm || formId == DetailForm ||
+        formId == SavedForm || formId == PlayForm;
 }
 
 void SetObjectY(FormType *formP, UInt16 index, Coord y, Coord height)
@@ -682,7 +683,8 @@ void ReleaseTitlePicker(AppState *s)
 
 static Boolean IsTitleForm(void)
 {
-    return OnForm(MainForm) || OnForm(SavedForm) || OnForm(DetailForm);
+    return OnForm(MainForm) || OnForm(BookmarksForm) || OnForm(SavedForm) ||
+        OnForm(DetailForm);
 }
 
 /* A 5-way direction, as a character or as a nav change */
@@ -705,11 +707,38 @@ static Boolean HandleTitleKey(AppState *s, const EventType *eventP)
     if (c == vchrPageDown || c == vchrRockerDown ||
             NavPressed(eventP, navBitDown, navChangeDown)) {
         ReleaseTitlePicker(s);
-        if (OnForm(MainForm)) MoveResultFocus(s, 1);
+        if (OnListForm()) MoveResultFocus(s, 1);
         else if (OnForm(SavedForm)) FocusSavedList(s);
         return true;
     }
     return IsDirectionKey(eventP);
+}
+
+/* A screen hidden while the one that covers it opens is shown then. */
+static void UnlockScreen(AppState *s)
+{
+    if (s->screenLocked) WinScreenUnlock();
+    s->screenLocked = false;
+}
+
+/* The title bar's dropdown. Home lies under the other screens, so going
+ * from one to the other passes it, out of sight. */
+static void SwitchScreen(AppState *s, UInt16 screen)
+{
+    UInt16 from = OnForm(BookmarksForm) ? screenBookmarks
+        : OnForm(SavedForm) ? screenDownloads : screenHome;
+    if (screen == from) return;
+    if (screen != screenHome && from != screenHome)
+        s->screenLocked = WinScreenLock(winLockCopy) != 0;
+    if (from == screenBookmarks) CloseBookmarks(s);
+    else if (from == screenDownloads) ReturnFromSaved(s);
+    if (screen == screenBookmarks) {
+        if (!OpenBookmarks(s)) UnlockScreen(s);
+    } else if (screen == screenDownloads) {
+        StopThumbs(s);
+        if (s->task == taskIdle) FrmPopupForm(SavedForm);
+        else UnlockScreen(s);
+    }
 }
 
 static Boolean HandleEvent(EventType *eventP, AppState *s)
@@ -724,6 +753,9 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
             FrmDrawForm(FrmGetActiveForm());
         } else if (OnForm(ChannelForm)) {
             LayoutChannelForm(s);
+            FrmDrawForm(FrmGetActiveForm());
+        } else if (OnForm(BookmarksForm)) {
+            LayoutBookmarksForm(s);
             FrmDrawForm(FrmGetActiveForm());
         } else if (OnForm(DetailForm)) {
             LayoutDetailForm();
@@ -748,6 +780,7 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
     switch (eventP->eType) {
         case nilEvent:
             AdvanceJob(s);
+            LoadStoredThumb(s);
             return false;
         case frmLoadEvent:
             formP = FrmInitForm(eventP->data.frmLoad.formID);
@@ -770,8 +803,15 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 EnterInputArea();
                 LayoutChannelForm(s);
                 FrmDrawForm(FrmGetActiveForm());
-                if (s->screenLocked) WinScreenUnlock();
-                s->screenLocked = false;
+                UnlockScreen(s);
+                LoadPage(s, 0);
+            } else if (OnForm(BookmarksForm)) {
+                InitBookmarksForm(s);
+                UseApplicationFocus();
+                EnterInputArea();
+                LayoutBookmarksForm(s);
+                FrmDrawForm(FrmGetActiveForm());
+                UnlockScreen(s);
                 LoadPage(s, 0);
             } else if (OnForm(SavedForm)) {
                 UseApplicationFocus();
@@ -779,6 +819,7 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 OpenSavedForm(s);
                 LayoutSavedForm(s);
                 FrmDrawForm(FrmGetActiveForm());
+                UnlockScreen(s);
             } else if (OnForm(PlayForm)) {
                 EnterInputArea();
                 LayoutPlayForm();
@@ -793,6 +834,7 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 ShowObject(DownloadButton, false);
                 ShowObject(PlayButton, false);
                 StartPlayer(s);
+                InitBookmarkStar(s);
                 FldSetTextPtr((FieldType *)GetObject(HeadField), s->head);
                 FldSetTextPtr((FieldType *)GetObject(InfoField), s->info);
                 FldSetTextPtr((FieldType *)GetObject(ProgressField),
@@ -822,6 +864,7 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 case BackButton: ReturnToList(s); return true;
                 case ChannelBackButton: CloseChannel(s); return true;
                 case ChannelTrigger: OpenChannel(s); return true;
+                case BookmarksBackButton: CloseBookmarks(s); return true;
                 case SavedBackButton: ReturnFromSaved(s); return true;
                 case SavedPlayButton: PlaySaved(s); return true;
                 case SavedDeleteButton: DeleteSaved(s); return true;
@@ -847,20 +890,16 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 return true;
             }
             /* Handled here so the trigger keeps the screen's name. */
-            if (eventP->data.popSelect.controlID == MainScreenTrigger) {
-                if (eventP->data.popSelect.selection == screenDownloads) {
-                    StopThumbs(s);
-                    if (s->task == taskIdle) FrmPopupForm(SavedForm);
-                }
-                LstSetSelection((ListType *)GetObject(MainScreenList), screenHome);
-                return true;
-            }
-            if (eventP->data.popSelect.controlID == SavedScreenTrigger) {
-                if (eventP->data.popSelect.selection == screenHome)
-                    ReturnFromSaved(s);
-                else
-                    LstSetSelection((ListType *)GetObject(SavedScreenList),
-                        screenDownloads);
+            if (eventP->data.popSelect.controlID == MainScreenTrigger ||
+                    eventP->data.popSelect.controlID == BookmarksScreenTrigger ||
+                    eventP->data.popSelect.controlID == SavedScreenTrigger) {
+                UInt16 listId = eventP->data.popSelect.listID;
+                Int16 selection = eventP->data.popSelect.selection;
+                Int16 prior = eventP->data.popSelect.priorSelection;
+                /* The list is gone once its screen has closed. */
+                LstSetSelection((ListType *)GetObject(listId), prior);
+                if (selection >= screenHome && selection <= screenDownloads)
+                    SwitchScreen(s, (UInt16)selection);
                 return true;
             }
             /* Handled here so the trigger keeps its empty label. */
@@ -946,9 +985,10 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 if (c == vchrPageUp || c == vchrRockerUp ||
                         c == vchrPageDown || c == vchrRockerDown) {
                     Boolean up = c == vchrPageUp || c == vchrRockerUp;
-                    if (up && OnForm(MainForm) &&
+                    if (up && !OnForm(ChannelForm) &&
                             (s->resultFocus == NO_RESULT || s->resultFocus == 0) &&
-                            FocusTitlePicker(s, MainScreenTrigger)) {
+                            FocusTitlePicker(s, OnForm(MainForm)
+                                ? MainScreenTrigger : BookmarksScreenTrigger)) {
                         FocusResult(s, NO_RESULT);
                         return true;
                     }
@@ -1162,7 +1202,8 @@ UInt32 PilotMain(UInt16 cmd, void *cmdPBP, UInt16 launchFlags)
         FrmGotoForm(MainForm);
         s->playWait = evtWaitForever;
         do {
-            Int32 timeout = s->jobP != 0 ? 1 : evtWaitForever;
+            Int32 timeout = s->jobP != 0 || HasStoredThumbs(s)
+                ? 1 : evtWaitForever;
             if (s->playbackP != 0 && s->playWait != evtWaitForever &&
                     (timeout == evtWaitForever || s->playWait < timeout))
                 timeout = s->playWait;
