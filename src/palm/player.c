@@ -134,10 +134,11 @@ static void GetVolumeBounds(RectangleType *boundsP)
     FrmGetObjectBounds(formP, FrmGetObjectIndex(formP, PlayVolumeGadget), boundsP);
 }
 
-/* Thirteen bars rising left to right; the colored ones show the volume. The
+/* Thirteen bars rising left to right; the dark ones show the volume. The
  * boost bars are amber, and pale amber while off. */
 void DrawVolume(const AppState *s)
 {
+    static const RGBColorType kLevel = { 0, 0x50, 0x50, 0x50 };
     static const RGBColorType kBoost = { 0, 0xF0, 0xA0, 0x00 };
     static const RGBColorType kBoostOff = { 0, 0xF4, 0xDC, 0xB0 };
     RectangleType bounds, bar;
@@ -159,7 +160,8 @@ void DrawVolume(const AppState *s)
         if (level > VOLUME_UNITY)
             FillColorBar(&bar, step * 2 / 3,
                 level <= s->prefs.volume ? &kBoost : &kBoostOff);
-        else if (level <= s->prefs.volume) FillAccentBar(&bar, step * 2 / 3);
+        else if (level <= s->prefs.volume)
+            FillColorBar(&bar, step * 2 / 3, &kLevel);
         else FillBar(&bar, step * 2 / 3, 0xC8);
     }
     WinSetCoordinateSystem(coordinates);
