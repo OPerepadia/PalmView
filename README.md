@@ -10,9 +10,9 @@ The app runs entirely on the handheld, no helper server or proxy required. It fe
 
 ## Screenshots
 
-| Search | Playback |
-| :---: | :---: |
-| ![Search results](media/search.png) | ![Playing a video](media/player.png) |
+| Search | Playback | On a Palm TX |
+| :---: | :---: | :---: |
+| <img src="media/search.png" alt="Search results" width="256"> | <img src="media/player.png" alt="Playing a video" width="256"> | <img src="media/palm-tx.jpg" alt="PalmView on a Palm TX" width="256"> |
 
 ## Requirements
 
