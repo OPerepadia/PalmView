@@ -1102,10 +1102,24 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
     return false;
 }
 
+/* Returns the depth to restore, or 0 if it did not change. */
+static UInt32 SetColorDepth16(void)
+{
+    UInt32 oldDepth = 0, depth = 16, depths = 0;
+    if (WinScreenMode(winScreenModeGet, 0, 0, &oldDepth, 0) != errNone ||
+            oldDepth == 16)
+        return 0;
+    if (WinScreenMode(winScreenModeGetSupportedDepths, 0, 0, &depths, 0) != errNone ||
+            (depths & (1UL << (16 - 1))) == 0)
+        return 0;
+    return WinScreenMode(winScreenModeSet, 0, 0, &depth, 0) == errNone ? oldDepth : 0;
+}
+
 static Err StartApplication(AppState *s)
 {
     Char errorText[12];
     Err error;
+    s->oldDepth = SetColorDepth16();
     s->searchP = (YtSearch *)MemPtrNew(sizeof(YtSearch));
     s->playerP = (YtPlayer *)MemPtrNew(sizeof(YtPlayer));
     s->searchTextH = MemHandleNew(64);
@@ -1178,6 +1192,8 @@ static void StopApplication(AppState *s)
     if (s->searchP != 0) MemPtrFree(s->searchP);
     FreeResults(s);
     if (s->playerP != 0) MemPtrFree(s->playerP);
+    if (s->oldDepth != 0)
+        WinScreenMode(winScreenModeSet, 0, 0, &s->oldDepth, 0);
 }
 
 UInt32 PilotMain(UInt16 cmd, void *cmdPBP, UInt16 launchFlags)

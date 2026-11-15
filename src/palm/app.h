@@ -170,6 +170,7 @@ typedef struct AppState {
     BitmapType *detailThumbP;
     ArmModule thumbModule;      /* decodes the thumbnails */
     Boolean thumbModuleLoaded;
+    UInt32 oldDepth;            /* restored when the app stops, if not 0 */
 
     UInt16 volume;
     UInt16 stream;
