@@ -15,6 +15,7 @@
 #define RomIncompatibleAlert 1100
 
 #define AppIcon 1000
+#define AppSmallIcon 1001
 #define AppVersionString 1000
 
 #endif

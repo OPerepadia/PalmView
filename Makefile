@@ -199,11 +199,12 @@ $(CODE2): $(ELF)
 $(RELOCS): $(ELF) tools/m68k-relocs.py
 	$(RELOCATE) $< $@
 
-# Icons are 32x22, and 64x44 for high density. The About logo is the icon at
-# 1.7x, cropped to 36x36 (72x72). Palm bitmaps have one transparent color and
-# no partial transparency, so edges are blended with a light background. That
-# leaves a faint halo on dark wallpapers.
+# Icons are 32x22, and 64x44 for high density, and 15x9 (30x18) in the list
+# view. The About logo is the icon at 1.7x, cropped to 36x36 (72x72). Palm
+# bitmaps have one transparent color and no partial transparency, so edges are
+# blended with a light background. That leaves a faint halo on dark wallpapers.
 ICONS := $(BUILD_DIR)/icon-color.bmp $(BUILD_DIR)/icon-color-hd.bmp \
+	$(BUILD_DIR)/icon-small.bmp $(BUILD_DIR)/icon-small-hd.bmp \
 	$(BUILD_DIR)/about.bmp $(BUILD_DIR)/about-hd.bmp
 ICON_EDGE := \( -clone 0 -alpha off -fill '\#ff00ff' -colorize 100 \) \
 	\( -clone 0 -background '\#dce6f0' -alpha remove -alpha off \) \
@@ -216,6 +217,10 @@ $(BUILD_DIR)/icon-color.bmp: src/palm/icon.svg | $(BUILD_DIR)
 	$(MAGICK) -background none -density 96 RSVG:$< $(ICON_EDGE) BMP3:$@
 $(BUILD_DIR)/icon-color-hd.bmp: src/palm/icon.svg | $(BUILD_DIR)
 	$(MAGICK) -background none -density 192 RSVG:$< $(ICON_EDGE) BMP3:$@
+$(BUILD_DIR)/icon-small.bmp: src/palm/icon.svg | $(BUILD_DIR)
+	$(MAGICK) -background none -density 39.3 RSVG:$< -gravity center -extent 15x9 $(ICON_EDGE) BMP3:$@
+$(BUILD_DIR)/icon-small-hd.bmp: src/palm/icon.svg | $(BUILD_DIR)
+	$(MAGICK) -background none -density 78.6 RSVG:$< -gravity center -extent 30x18 $(ICON_EDGE) BMP3:$@
 $(BUILD_DIR)/about.bmp: src/palm/icon.svg | $(BUILD_DIR)
 	$(MAGICK) -background none -density 163 RSVG:$< $(call ABOUT_CROP,36x36) $(ICON_EDGE) BMP3:$@
 $(BUILD_DIR)/about-hd.bmp: src/palm/icon.svg | $(BUILD_DIR)
