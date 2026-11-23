@@ -199,6 +199,17 @@ static void UseAddress(NetJob *jobP)
         sizeof(jobP->address.addr));
 }
 
+/* What connecting the same socket again answers: how far the connection
+ * is. The Palm TX calls a socket writable, with a peer, long before it is
+ * connected. */
+static Err AskConnect(NetJob *jobP)
+{
+    Err error = errNone;
+    NetLibSocketConnect(jobP->config.netRefNum, jobP->socket,
+        (NetSocketAddrType *)&jobP->address, sizeof(jobP->address), 1, &error);
+    return error;
+}
+
 /* A new connection that is reset before TLS can start tends to work
  * on the next try, and often with the next address. */
 static Boolean Reconnect(NetJob *jobP)
@@ -486,9 +497,8 @@ static UInt16 Step(NetJob **jobPP)
             if (NetLibSocketConnect(jobP->config.netRefNum, jobP->socket,
                     (NetSocketAddrType *)&jobP->address,
                     sizeof(jobP->address), jobP->config.stepTimeoutTicks,
-                    &error) == 0)
-                return StepConnected(jobPP);
-            if (!Connecting(error)) return NetworkFailure(jobPP, error);
+                    &error) != 0 && !Connecting(error))
+                return NetworkFailure(jobPP, error);
             jobP->state = jobStateConnectWait;
             return netJobRunning;
         }
@@ -505,8 +515,6 @@ static UInt16 Step(NetJob **jobPP)
             if (selected > 0) {
                 Err socketError = errNone, optionError = errNone;
                 UInt16 errorSize = sizeof(socketError);
-                NetSocketAddrINType local, remote;
-                Int16 localSize = sizeof(local), remoteSize = sizeof(remote);
                 if (NetLibSocketOptionGet(jobP->config.netRefNum,
                         jobP->socket, netSocketOptLevelSocket,
                         netSocketOptSockErrorStatus, &socketError,
@@ -514,25 +522,17 @@ static UInt16 Step(NetJob **jobPP)
                         &optionError) < 0 || socketError != errNone)
                     return NetworkFailure(jobPP, optionError != errNone
                         ? optionError : socketError);
-                /* NetLib may call a socket writable before it is connected;
-                 * TLS must wait until it has a peer. */
-                MemSet(&remote, sizeof(remote), 0);
-                if (NetLibSocketAddr(jobP->config.netRefNum, jobP->socket,
-                        (NetSocketAddrType *)&local, &localSize,
-                        (NetSocketAddrType *)&remote, &remoteSize,
-                        jobP->config.stepTimeoutTicks, &optionError) >= 0 &&
-                    remote.port != 0)
-                    return StepConnected(jobPP);
-                if (optionError != errNone &&
-                    optionError != netErrSocketNotConnected &&
-                    !Connecting(optionError))
-                    return NetworkFailure(jobPP, optionError);
-                if (TimedOut(jobP->phaseStart, jobP->config.operationTimeoutTicks))
+                /* Sending before it is connected ends the TLS session. A
+                 * connection that failed is left for TLS to report. */
+                if (!Connecting(AskConnect(jobP))) return StepConnected(jobPP);
+                if (TimedOut(jobP->phaseStart, IdleTimeout(jobP)))
                     return NetworkFailure(jobPP, netErrTimeout);
+                /* The select above did not wait. */
+                if (!jobP->config.poll) SysTaskDelay(1);
                 return netJobRunning;
             }
             if ((selected == 0 || Connecting(error)) &&
-                !TimedOut(jobP->phaseStart, jobP->config.operationTimeoutTicks))
+                !TimedOut(jobP->phaseStart, IdleTimeout(jobP)))
                 return netJobRunning;
             return NetworkFailure(jobPP, error);
         }
