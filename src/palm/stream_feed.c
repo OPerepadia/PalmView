@@ -4,6 +4,7 @@
 
 /* Only one request is in flight at a time, and it asks for no more than
  * its ring has room for, so every byte that arrives can be read at once.
+ * A whole live segment may not fit: see WaitForRoom.
  * On the Palm TX, data waiting unread on one connection starves the
  * others: their data and even new handshakes stop getting through. Each
  * stream keeps its connection open between requests, because a new TLS
@@ -254,16 +255,27 @@ static Int16 Receive(void *contextP, const UInt8 *dataP, UInt16 length)
     return 0;
 }
 
-/* The next range of a video, as much as the ring has room for */
+/* Where the bytes a track can ask for by range end: a video, or the live
+ * segment it is partway into */
+static UInt32 RangeEnd(const StreamFeed *f, const FeedTrack *t)
+{
+    if (f->live) return t->segmentEnd;
+    return t->limit != 0 ? t->limit : t->formatP->contentLength;
+}
+
+/* The last byte of the next range, as much as the ring has room for */
+static UInt32 RangeLast(const StreamFeed *f, const FeedTrack *t)
+{
+    UInt32 end = RangeEnd(f, t), room = Mp4StreamSpace(t->streamP);
+    if (room > REQUEST_BYTES) room = REQUEST_BYTES;
+    return (room < end - t->offset ? t->offset + room : end) - 1;
+}
+
 static UInt16 BuildRange(StreamFeed *f, FeedTrack *t)
 {
-    UInt32 length = t->limit != 0 ? t->limit : t->formatP->contentLength;
-    UInt32 room = Mp4StreamSpace(t->streamP);
-    UInt32 end;
-    if (room > REQUEST_BYTES) room = REQUEST_BYTES;
-    end = t->offset + room - 1;
-    if (end >= length) end = length - 1;
-    UdpLogLine(f->config.logP, t->tagP, "get %-% of %", t->offset, end, length);
+    UInt32 end = RangeLast(f, t);
+    UdpLogLine(f->config.logP, t->tagP, "get %-% of %", t->offset, end,
+        RangeEnd(f, t));
     return YtBuildMediaRequest(f->clientP, t->formatP->url, t->offset, end,
         true, t->request, sizeof(t->request));
 }
@@ -281,7 +293,7 @@ static UInt16 BuildLive(StreamFeed *f, FeedTrack *t)
     }
     if (start != 0) {
         if (t->segmentEnd <= t->offset) return 0;
-        end = t->segmentEnd - t->segmentStart - 1;
+        end = RangeLast(f, t) - t->segmentStart;
     }
     UdpLogLine(f->config.logP, t->tagP, "get segment % from %", t->sequence,
         start, 0);
@@ -410,29 +422,45 @@ static void Finished(StreamFeed *f, FeedTrack *t)
         (UInt32)t->failures * RETRY_SECONDS, 0);
 }
 
-/* The room a video's next request needs, or 0 if it is all in */
-static UInt32 RangeNeed(const FeedTrack *t)
+/* The room the next range needs, or 0 if it is all in */
+static UInt32 RangeNeed(const StreamFeed *f, const FeedTrack *t)
 {
-    UInt32 end = t->limit != 0 ? t->limit : t->formatP->contentLength;
+    UInt32 end = RangeEnd(f, t);
     UInt32 need = t->streamP->capacity / STREAM_FEED_REFILL_DIVISOR;
     if (t->offset >= end) return 0;
     return need < end - t->offset ? need : end - t->offset;
 }
 
-/* Live: room for a whole segment, guessed from the largest so far, once
- * YouTube should have it. Until the newest number is known, only video
- * asks, for that. */
+/* Room for a whole live segment, guessed from the largest so far */
+static UInt32 SegmentNeed(const StreamFeed *f, const FeedTrack *t)
+{
+    UInt32 most = t->streamP->capacity / 4 * 3;
+    UInt32 need = t->largest != 0 ? t->largest + t->largest / 4
+        : t->formatP->bitrate / 8 * f->segmentSeconds;
+    return need < most ? need : most;
+}
+
+/* Live: the rest of a segment by range, or a whole one once YouTube should
+ * have it. Until the newest number is known, only video asks, for that. */
 static UInt32 LiveNeed(const StreamFeed *f, const FeedTrack *t)
 {
-    UInt32 need, most = t->streamP->capacity / 4 * 3;
     if (!f->headKnown) return t == &f->tracks[STREAM_FEED_VIDEO] ? 1 : 0;
     if (Mp4StreamReceived(t->streamP)) return 0;
+    if (t->segmentEnd > t->offset) return RangeNeed(f, t);
     if (t->sequence > f->head && TimGetTicks() - f->headTicks <
             f->segmentSeconds * SysTicksPerSecond())
         return 0;
-    need = t->largest != 0 ? t->largest + t->largest / 4
-        : t->formatP->bitrate / 8 * f->segmentSeconds;
-    return need < most ? need : most;
+    return SegmentNeed(f, t);
+}
+
+Boolean StreamFeedFull(const StreamFeed *f, UInt16 track)
+{
+    const FeedTrack *t = &f->tracks[track];
+    UInt32 space = Mp4StreamSpace(t->streamP);
+    if (space < t->streamP->capacity / STREAM_FEED_REFILL_DIVISOR) return true;
+    /* Live: not while a segment is still coming in */
+    return f->live && f->activeP != t && t->segmentEnd <= t->offset &&
+        space < SegmentNeed(f, t);
 }
 
 /* How much a track wants a request now: 0 if it cannot or need not ask,
@@ -442,7 +470,7 @@ static UInt32 Want(const StreamFeed *f, const FeedTrack *t)
     UInt32 space, need;
     if (t->streamP == 0) return 0;
     if (t->waiting && (Int32)(TimGetTicks() - t->retryTicks) < 0) return 0;
-    need = f->live ? LiveNeed(f, t) : RangeNeed(t);
+    need = f->live ? LiveNeed(f, t) : RangeNeed(f, t);
     space = Mp4StreamSpace(t->streamP);
     if (need == 0 || space < need) return 0;
     return (space << 8) / t->streamP->capacity + 1;

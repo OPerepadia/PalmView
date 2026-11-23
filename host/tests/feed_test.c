@@ -5,16 +5,19 @@
  * either stream runs dry. Checks the feed's rules: one request in flight
  * at a time, none asking for more than its ring has room for, ranges in
  * order, reads paced while a ring is at least half full and less hard
- * below half while the player plays, and both streams read to the end. Kept connections are reused,
- * and some are dropped by the "server" to exercise reconnects. Now and
- * then both streams seek to random segments, mid-request or not.
+ * below half while the player plays, and both streams read to the end.
+ * Kept connections are reused, and some are dropped by the "server" to
+ * exercise reconnects. Now and then both streams seek to random segments,
+ * mid-request or not.
  *
  * With --live, the files are live segments in a row (pview live). The
  * "server" puts out one more each segment time, holds a request for the
  * next one until it is out, answers 204 when it does not come, and fails any
  * request out of order or past a segment's end. Some responses drop
- * partway. Once the segments run out the stream must end, with every
- * sample read in order.
+ * partway, and the network goes quiet for a while. The player plays in
+ * real time and buffers by playback.c's rule, so a feed that stops asking
+ * too early gets it stuck. Once the segments run out the stream must end,
+ * with every sample read in order.
  *
  *   feed_test [--live] VIDEO.mp4 AUDIO.mp4 VIDEO_RING_KB AUDIO_RING_KB SEED
  */
@@ -34,6 +37,9 @@ UInt16 SysTicksPerSecond(void) { return 100; }
 #define FIRST_SEGMENT 5000UL
 /* YouTube holds a request for the next segment this long. */
 #define HOLD_TICKS 750
+/* The same as in playback.c */
+#define START_BUFFER_MS 3000UL
+#define RESUME_BUFFER_MS 5000UL
 
 typedef struct Source {
     const char *hostP;
@@ -78,8 +84,8 @@ static int gActive, gRequests, gReused, gDropped, gClosed, gSeeks;
 static Boolean gPlaying;
 static UInt32 gPace = PACE_MINIMUM;
 static Boolean gLive;
-static UInt32 gSegmentTicks, gInitial;
-static int gProbes, gHeld, gEarly, gCut, gCancelled;
+static UInt32 gSegmentTicks, gInitial, gQuietFrom, gQuietTo, gClock;
+static int gProbes, gHeld, gEarly, gCut, gCancelled, gWaits;
 
 static int Fail(const char *messageP)
 {
@@ -166,9 +172,11 @@ static void BeginLive(NetJob *jobP, const char *sequenceP, const char *rangeP)
     start = 0;
     end = boundsP[1] - boundsP[0] - 1;
     if (rangeP != 0) {
+        UInt32 last;
         start = (UInt32)strtoul(rangeP + 6, &endP, 10);
-        if ((UInt32)strtoul(endP + 1, 0, 10) != end)
-            Fail("range does not end with the segment");
+        last = (UInt32)strtoul(endP + 1, 0, 10);
+        if (last > end) Fail("range past the segment's end");
+        end = last;
     }
     if (start != s->inSegment) Fail("request does not continue the segment");
     jobP->next = boundsP[0] + start;
@@ -252,6 +260,7 @@ UInt16 NetJobStep(NetJob **jobPP)
         r->status = netJobCancelled;
         return End(jobPP);
     }
+    if (gTicks >= gQuietFrom && gTicks < gQuietTo) return netJobRunning;
     switch (jobP->state) {
         case jobIdle:
             return netJobIdle;
@@ -392,7 +401,8 @@ static void OpenSource(int i, const char *pathP, const char *ringKbP)
         Fail("cannot open a stream");
 }
 
-/* The feed starts LIVE_BEHIND_SECONDS back: at the first segment. */
+/* The feed starts LIVE_BEHIND_SECONDS back: at the first segment. The
+ * network goes quiet for 5 to 25 s. */
 static void StartServer(void)
 {
     UInt32 seconds = gFormats[0].segmentSeconds;
@@ -400,6 +410,8 @@ static void StartServer(void)
     gInitial = (LIVE_BEHIND_SECONDS + seconds - 1) / seconds + 1;
     if (gInitial > gSources[0].count || gInitial > gSources[1].count)
         Fail("too few segments");
+    gQuietFrom = 200 + (UInt32)(rand() % 1000);
+    gQuietTo = gQuietFrom + 500 + (UInt32)(rand() % 2000);
 }
 
 /* 240p and its sound over 213 s: 36 KB/s, paced a quarter above. */
@@ -431,7 +443,7 @@ static Boolean SeekNowAndThen(StreamFeed *f)
 {
     UInt32 offsets[2];
     int i;
-    if (gLive || gSeeks >= SEEKS || rand() % 2000 != 0 ||
+    if (gSeeks >= SEEKS || rand() % 2000 != 0 ||
         gStreams[0].segmentCount == 0 || gStreams[1].segmentCount == 0)
         return false;
     for (i = 0; i < 2; i++) {
@@ -446,18 +458,62 @@ static Boolean SeekNowAndThen(StreamFeed *f)
     return true;
 }
 
-static void TakeSample(int i)
+static UInt16 TakeSample(int i)
 {
     static UInt8 sample[SAMPLE_CAPACITY];
     Mp4Sample s;
     UInt16 result = Mp4StreamNext(&gStreams[i], &s, sample, sizeof(sample));
     if (result == mp4StreamError) Fail("stream error");
     if (result == mp4StreamEnd) gEnded[i] = true;
-    if (result != mp4StreamSample) return;
+    if (result != mp4StreamSample) return result;
     if (gLive && (gTaken[i] == 0 ? s.dts != 0 : s.dts <= gLastDts[i]))
         Fail("times do not start at 0 and grow");
     gLastDts[i] = s.dts;
     gTaken[i]++;
+    return result;
+}
+
+static void PlayVideo(StreamFeed *f, UInt32 loops)
+{
+    Boolean waiting = Waiting();
+    int i;
+    if (SeekNowAndThen(f)) return;
+    gPlaying = !waiting;
+    for (i = 0; i < 2; i++)
+        if (gPlaying && !gEnded[i] && loops % (i == 0 ? 3 : 2) == 0)
+            TakeSample(i);
+}
+
+/* Both streams have ms in, or full rings: StreamsBuffered in playback.c. */
+static Boolean Buffered(const StreamFeed *f, UInt32 ms)
+{
+    UInt16 i;
+    for (i = 0; i < 2; i++) {
+        const Mp4Stream *s = &gStreams[i];
+        if (!Mp4StreamReady(&gStreams[i])) return false;
+        if (!Mp4StreamReceived(s) && !StreamFeedFull(f, i) &&
+            Mp4StreamBuffered(s) * 1000UL / (StreamFeedRate(f, i) + 1) < ms)
+            return false;
+    }
+    return true;
+}
+
+static void PlayLive(const StreamFeed *f)
+{
+    /* Ticks of decoded frames and sound the player keeps ahead */
+    static const UInt32 kAhead[2] = { 10, 70 };
+    int i;
+    if (!gPlaying)
+        gPlaying = Buffered(f, gClock == 0 ? START_BUFFER_MS : RESUME_BUFFER_MS);
+    if (gPlaying) gClock += 2;
+    for (i = 0; i < 2; i++) {
+        while (gPlaying && !gEnded[i] &&
+               gLastDts[i] / (gTracks[i].timescale / 100) <= gClock + kAhead[i]) {
+            if (TakeSample(i) != mp4StreamWait) continue;
+            gPlaying = false;
+            gWaits++;
+        }
+    }
 }
 
 int main(int argc, char **argv)
@@ -489,17 +545,12 @@ int main(int argc, char **argv)
     gPace = f->pace;
     StreamFeedStart(f, &gStreams[0], &gStreams[1], false);
     for (loops = 0; !(gEnded[0] && gEnded[1]); loops++) {
-        Boolean waiting;
         if (loops == MAX_LOOPS) Fail("streams never finished");
         gTicks += 2;
         StreamFeedStep(f, gPlaying);
         if (StreamFeedError(f) != 0) Fail(StreamFeedError(f));
-        waiting = Waiting();
-        if (SeekNowAndThen(f)) continue;
-        gPlaying = !waiting;
-        for (i = 0; i < 2; i++)
-            if (gPlaying && !gEnded[i] && loops % (i == 0 ? 3 : 2) == 0)
-                TakeSample(i);
+        if (gLive) PlayLive(f);
+        else PlayVideo(f, loops);
     }
     for (i = 0; i < 2; i++) {
         if (gSources[i].next != gSources[i].size) Fail("a stream was cut short");
@@ -511,9 +562,9 @@ int main(int argc, char **argv)
         (unsigned)gTaken[0], (unsigned)gTaken[1], gRequests, gReused, gDropped,
         gClosed, gSeeks, (unsigned)gRingKb[0], (unsigned)gRingKb[1]);
     if (gLive)
-        printf("  %d cut, %d cancelled, %d probes, %d held, %d early, "
+        printf("  %d cut, %d cancelled, %d probes, %d held, %d early, %d waits, "
             "rates %u + %u B/s, %u s\n", gCut, gCancelled, gProbes, gHeld, gEarly,
-            (unsigned)StreamFeedRate(f, 0), (unsigned)StreamFeedRate(f, 1),
+            gWaits, (unsigned)StreamFeedRate(f, 0), (unsigned)StreamFeedRate(f, 1),
             (unsigned)(gTicks / 100));
     StreamFeedFree(f);
     return 0;

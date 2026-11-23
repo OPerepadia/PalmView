@@ -44,6 +44,8 @@ Boolean StreamFeedLive(const StreamFeed *f);
 /* A stream's bytes per second: its length over its time, or what a live
  * stream's segments so far averaged. YouTube's figure without either. */
 UInt32 StreamFeedRate(const StreamFeed *f, UInt16 track);
+/* The ring has no room for what the feed would ask for next. */
+Boolean StreamFeedFull(const StreamFeed *f, UInt16 track);
 /* Downloads from the start into the streams, opened with the lengths
  * above. With headersFirst, each stops after its segment index (where
  * the format says it ends) until StreamFeedSeek moves it on. */

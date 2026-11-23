@@ -114,13 +114,17 @@ newest number.
   after the newest number last changed.
 - **Whole segments.** A range past a segment's end never completes: the
   server states a longer length than it sends. So a segment is fetched
-  whole, once its ring has room for 1.25 times the largest so far. A
-  dropped connection is resumed with a range up to the stated
-  `Content-Length`.
+  whole, once its ring has room for 1.25 times the largest so far. After
+  a dropped connection, the rest up to the stated `Content-Length` is
+  fetched in ranges that fit.
 - **Waiting for room.** A segment can still be larger than the room left.
   Its response then waits for the player. If the other stream runs low
   meanwhile, the player could stop taking from both. So the response is
-  cut, to be finished later with a range.
+  cut, to be finished later with ranges.
+- **Full rings.** The player starts with 3 s buffered, or with full rings.
+  Only the feed knows when a ring has no room for its next request, so the
+  player asks it (`StreamFeedFull`). With a rule of its own, the player
+  could wait forever for data the feed will not ask for.
 - **The end.** With no new segment for 60 s, the stream ends after its
   last whole segment.
 
@@ -270,8 +274,10 @@ build/host/playback_sim --live testdata/live/ID.live.video.mp4 \
 ```
 
 `build/host/feed_test --live` runs the feed against a fake live server.
-It puts out a segment every few seconds, holds early requests and drops
-connections, then ends the stream.
+It puts out a segment every few seconds, holds early requests, drops
+connections and goes quiet for a while, then ends the stream. The fake
+player follows the player's buffering rule (`StreamsBuffered`, copied from
+`playback.c`), so a feed that leaves it waiting forever fails.
 
 ### PalmView Bench
 

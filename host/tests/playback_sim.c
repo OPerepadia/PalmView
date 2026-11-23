@@ -219,6 +219,12 @@ UInt32 StreamFeedLength(const StreamFeed *f, UInt16 track)
 Boolean StreamFeedLive(const StreamFeed *f) { (void)f; return gLive; }
 
 UInt32 StreamFeedRate(const StreamFeed *f, UInt16 track) { return f->rates[track]; }
+
+Boolean StreamFeedFull(const StreamFeed *f, UInt16 track)
+{
+    const Mp4Stream *s = f->streams[track];
+    return Mp4StreamSpace(s) < s->capacity / STREAM_FEED_REFILL_DIVISOR;
+}
 const Char *StreamFeedError(const StreamFeed *f) { (void)f; return 0; }
 UInt32 StreamFeedReceived(const StreamFeed *f) { return f->received; }
 void StreamFeedStop(StreamFeed *f) { (void)f; }

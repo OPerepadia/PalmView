@@ -587,10 +587,8 @@ static Boolean StreamsBuffered(const Playback *p, UInt32 ms)
 {
     UInt16 i;
     for (i = 0; i < 2; i++) {
-        const Mp4Stream *s = &p->streams[i];
-        if (!s->ready) return false;
-        if (PlaybackBufferedMs(p, i) < ms &&
-            Mp4StreamSpace(s) >= s->capacity / STREAM_FEED_REFILL_DIVISOR)
+        if (!p->streams[i].ready) return false;
+        if (PlaybackBufferedMs(p, i) < ms && !StreamFeedFull(p->feedP, i))
             return false;
     }
     return true;

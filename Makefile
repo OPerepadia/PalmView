@@ -361,7 +361,8 @@ $(FEED_TEST): host/tests/feed_test.c src/palm/stream_feed.c src/palm/stream_feed
 # Offline tests. JSON samples in testdata/ (not committed) are compared
 # with Python's parser when present. Downloaded streams in testdata/media/
 # are read as they would arrive over the network, through small rings, and
-# so are live segments in testdata/live/ (pview live).
+# so are live segments in testdata/live/ (pview live), also with the rings
+# a Palm short of memory would have.
 test: $(JSON_DUMP) $(UNIT_TESTS) $(PVIEW) $(STREAM_TEST) $(READ_SEEK_TEST) $(FEED_TEST) \
 		$(RGB_TEST)
 	$(UNIT_TESTS)
@@ -382,9 +383,10 @@ test: $(JSON_DUMP) $(UNIT_TESTS) $(PVIEW) $(STREAM_TEST) $(READ_SEEK_TEST) $(FEE
 	done
 	@for video in $(wildcard testdata/live/*.live.video.mp4); do \
 		base=$${video%.video.mp4}; \
-		for seed in 1 2 3; do \
-			$(FEED_TEST) --live $$video $$base.audio.mp4 191 320 $$seed || exit 1; \
-			$(FEED_TEST) --live $$video $$base.audio.mp4 48 48 $$seed || exit 1; \
+		for rings in "287 212" "384 128" "143 106" "71 53" "48 96" "48 48"; do \
+			for seed in 1 2 3; do \
+				$(FEED_TEST) --live $$video $$base.audio.mp4 $$rings $$seed || exit 1; \
+			done; \
 		done; \
 	done
 	@for file in host/tests/edge.json $(wildcard testdata/*.json); do \
