@@ -29,6 +29,7 @@
 #define DetailQualityTrigger 1111
 #define DetailQualityList 1112
 #define ChannelTrigger 1113
+#define RetryButton 1114
 
 #define MainMenuBar 1200
 #define MenuAbout 1201

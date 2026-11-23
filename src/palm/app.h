@@ -194,6 +194,7 @@ typedef struct AppState {
     Char progress[192];
     UInt16 percent;
     UInt16 quality;             /* chosen for the selected video */
+    Boolean playerFailed;       /* the stream info did not arrive */
     Boolean saved;              /* the selected video is on the card */
     Boolean bookmarked;
     UInt16 savedQuality;

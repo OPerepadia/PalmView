@@ -22,6 +22,7 @@ Boolean CanPlayDetail(const AppState *s);
 Boolean HasDetailPicker(const AppState *s);
 Boolean InfoAtTop(void);
 void PlayDetail(AppState *s);
+void RetryDetail(AppState *s);
 void StartPlayer(AppState *s);
 void FinishPlayer(AppState *s);
 

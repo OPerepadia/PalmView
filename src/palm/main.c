@@ -861,6 +861,7 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
                 case PageNextButton: NextPage(s); return true;
                 case DownloadButton: StartDownload(s); return true;
                 case CancelButton: CancelJob(s); return true;
+                case RetryButton: RetryDetail(s); return true;
                 case BackButton: ReturnToList(s); return true;
                 case ChannelBackButton: CloseChannel(s); return true;
                 case ChannelTrigger: OpenChannel(s); return true;
@@ -1037,9 +1038,10 @@ static Boolean HandleEvent(EventType *eventP, AppState *s)
             if (OnForm(DetailForm) && (eventP->data.keyDown.chr == vchrRockerCenter ||
                     NavPressed(eventP, navBitSelect, navChangeSelect))) {
                 UInt32 now = TimGetTicks();
-                if (now - s->lastCentre >= SysTicksPerSecond() / 4 &&
-                        CanPlayDetail(s))
-                    PlayDetail(s);
+                if (now - s->lastCentre >= SysTicksPerSecond() / 4) {
+                    if (CanPlayDetail(s)) PlayDetail(s);
+                    else RetryDetail(s);
+                }
                 s->lastCentre = now;
                 return true;
             }

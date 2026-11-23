@@ -30,7 +30,7 @@
 void LayoutDetailForm(void)
 {
     static const UInt16 kButtonIds[] = {
-        PlayButton, DownloadButton, CancelButton, BackButton
+        PlayButton, DownloadButton, CancelButton, RetryButton, BackButton
     };
     FormType *formP = FrmGetActiveForm();
     RectangleType bounds;
@@ -216,6 +216,12 @@ Boolean CanPlayDetail(const AppState *s)
     return IsIdle(s) && (s->saved || YtPlayerPlayable(s->playerP));
 }
 
+/* Retry takes Play's place. */
+static Boolean CanRetryDetail(const AppState *s)
+{
+    return IsIdle(s) && s->playerFailed && !CanPlayDetail(s);
+}
+
 void RefreshDetail(AppState *s)
 {
     Boolean idle = IsIdle(s);
@@ -230,6 +236,7 @@ void RefreshDetail(AppState *s)
     CtlSetEnabled((ControlType *)GetObject(ChannelTrigger),
         s->task != taskDownload);
     ShowObject(PlayButton, CanPlayDetail(s));
+    ShowObject(RetryButton, CanRetryDetail(s));
     ShowDetailQuality(s);
     DrawProgressBar(s);
     ShowDetailThumb(s);
@@ -311,6 +318,7 @@ void StartPlayer(AppState *s)
     s->percent = 0;
     s->quality = s->prefs.quality;
     s->saved = false;
+    s->playerFailed = false;
     BuildInfo(s);
     JsonScanInit(&s->scanner, s->jsonValue, sizeof(s->jsonValue),
         YtPlayerValue, YtPlayerEnd, s->playerP);
@@ -319,8 +327,18 @@ void StartPlayer(AppState *s)
     AppendInfoLine(s->info, sizeof(s->info), "Getting stream info...");
     if (!StartApiJob(s, taskPlayer, YtBuildPlayerRequest(&s->client,
             s->prefs.visitor, itemP->videoId, s->body, s->request,
-            sizeof(s->request))))
+            sizeof(s->request)))) {
+        s->playerFailed = true;
         BuildInfo(s);
+    }
+}
+
+void RetryDetail(AppState *s)
+{
+    if (!CanRetryDetail(s)) return;
+    StopThumbs(s);
+    StartPlayer(s);
+    RefreshDetail(s);
 }
 
 void FinishPlayer(AppState *s)
@@ -328,6 +346,7 @@ void FinishPlayer(AppState *s)
     YtPlayer *playerP = s->playerP;
     if (s->jobResult.status != netJobOk ||
         JsonScanFinish(&s->scanner) != jsonOk) {
+        s->playerFailed = true;
         if (s->jobResult.status == netJobOk)
             StrCopy(s->progress, "Unexpected reply from YouTube.");
         else
