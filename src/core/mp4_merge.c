@@ -337,6 +337,7 @@ static Boolean ParseFragment(Merge *m, Track *t, Fragment *f, SampleProc procP,
     if (Mp4FragBegin(&iter, m->moofP, f->moofSize, f->moofOffset,
             &t->defaults) != mp4MergeOk)
         return Fail(m, iter.status, iter.line);
+    if (iter.startTimeHigh != 0) return FAIL(m, mp4MergeUnsupported);
     f->startTime = iter.startTime;
     f->sampleCount = 0;
     f->dataSize = 0;

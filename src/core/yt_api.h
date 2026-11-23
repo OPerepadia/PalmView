@@ -89,19 +89,30 @@ Boolean YtSplitUrl(const Char *urlP, Char *hostP, UInt16 hostCapacity,
 UInt16 YtBuildMediaRequest(const YtClient *clientP, const Char *urlP,
                            UInt32 start, UInt32 end, Boolean keepAlive,
                            Char *requestP, UInt16 capacity);
+/* GET for one segment of a live stream, by number, or the newest one with
+ * YT_NEWEST_SEGMENT. Bytes [start, end] of it, or all of it when end is
+ * YT_WHOLE_SEGMENT. A range past the segment's end never completes. */
+#define YT_NEWEST_SEGMENT 0xFFFFFFFFUL
+#define YT_WHOLE_SEGMENT 0xFFFFFFFFUL
+UInt16 YtBuildSegmentRequest(const YtClient *clientP, const Char *urlP,
+                             UInt32 sequence, UInt32 start, UInt32 end,
+                             Boolean keepAlive, Char *requestP,
+                             UInt16 capacity);
 /* GET for a video's smallest thumbnail, default.jpg, from YT_THUMB_HOST.
  * With keepAlive the next thumbnail can follow on the same connection. */
 UInt16 YtBuildThumbRequest(const YtClient *clientP, const Char *videoIdP,
                            Boolean keepAlive, Char *requestP, UInt16 capacity);
 /* Replaces a stream URL with where a redirect sent it, without the range
- * parameter the redirect carries. False, leaving urlP alone, if locationP
+ * and segment parameters the redirect carries. False, leaving urlP alone, if locationP
  * is not https or does not fit. */
 Boolean YtApplyRedirect(Char *urlP, UInt16 capacity, const Char *locationP);
 
 typedef struct YtFormat {
     UInt16 itag;
-    UInt32 contentLength;
+    UInt32 contentLength;   /* 0 for a live stream */
     UInt32 indexEnd;        /* the byte after the segment index, or 0 */
+    UInt32 bitrate;         /* bits per second, as YouTube states it */
+    UInt16 segmentSeconds;  /* a live stream's segment length, or 0 */
     Boolean found;
     Char url[YT_URL_CAPACITY];
 } YtFormat;
@@ -124,6 +135,8 @@ typedef struct YtPlayer {
     UInt16 curItag;
     UInt32 curLength;
     UInt32 curIndexEnd;
+    UInt32 curBitrate;
+    UInt16 curSegmentSeconds;
     Boolean curHasUrl;
     Boolean curUnusable;
     Boolean curDefault;     /* audioTrack is the default language */
@@ -142,7 +155,9 @@ Boolean YtPlayerValue(void *contextP, const JsonScanner *scannerP,
 Boolean YtPlayerEnd(void *contextP, const JsonScanner *scannerP);
 /* video[choice] if YouTube offers it, else the first one it does, or 0. */
 const YtFormat *YtPlayerVideo(const YtPlayer *playerP, UInt16 choice);
+/* Videos play, live streams too. Only videos download. */
 Boolean YtPlayerPlayable(const YtPlayer *playerP);
+Boolean YtPlayerDownloadable(const YtPlayer *playerP);
 
 typedef struct YtSearchItem {
     Char videoId[YT_VIDEO_ID_CAPACITY];

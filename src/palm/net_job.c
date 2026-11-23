@@ -57,6 +57,7 @@ struct NetJob {
     Boolean bufferFilled;       /* TLS may have more right away */
     Char *locationP;
     UInt16 locationCapacity;
+    const Char *numberNameP;
     const Char *tagP;
     UInt8 buffer[NET_JOB_IO_CAPACITY];
 };
@@ -296,24 +297,53 @@ void NetJobKeepLocation(NetJob *jobP, Char *bufferP, UInt16 capacity)
     if (capacity != 0) bufferP[0] = '\0';
 }
 
+void NetJobKeepNumber(NetJob *jobP, const Char *nameP)
+{
+    jobP->numberNameP = nameP;
+}
+
+/* The value of header nameP ("Name:"), or 0. */
+static const Char *FindHeader(const NetJob *jobP, const Char *nameP)
+{
+    const Char *p = jobP->parser.headers;
+    UInt16 length = StrLen(nameP);
+    while ((p = StrChr(p, '\n')) != 0) {
+        p++;
+        if (StrNCaselessCompare(p, nameP, length) != 0) continue;
+        for (p += length; *p == ' ' || *p == '\t'; p++) {}
+        return p;
+    }
+    return 0;
+}
+
 /* The parser keeps only the start of Location; YouTube's are long. */
 static void KeepLocation(NetJob *jobP)
 {
-    const Char *p = jobP->parser.headers;
+    const Char *valueP, *endP;
     if (jobP->locationP == 0) return;
-    while ((p = StrChr(p, '\n')) != 0) {
-        const Char *valueP, *endP;
-        p++;
-        if (StrNCaselessCompare(p, "Location:", 9) != 0) continue;
-        for (valueP = p + 9; *valueP == ' ' || *valueP == '\t'; valueP++) {}
-        for (endP = valueP; *endP != '\0' && *endP != '\r' && *endP != '\n';
-             endP++) {}
-        if (endP - valueP < jobP->locationCapacity) {
-            MemMove(jobP->locationP, valueP, endP - valueP);
-            jobP->locationP[endP - valueP] = '\0';
-        }
-        return;
+    valueP = FindHeader(jobP, "Location:");
+    if (valueP == 0) return;
+    for (endP = valueP; *endP != '\0' && *endP != '\r' && *endP != '\n';
+         endP++) {}
+    if (endP - valueP < jobP->locationCapacity) {
+        MemMove(jobP->locationP, valueP, endP - valueP);
+        jobP->locationP[endP - valueP] = '\0';
     }
+}
+
+static void ReadHeaders(NetJob *jobP)
+{
+    NetJobResult *resultP = jobP->resultP;
+    const Char *valueP;
+    resultP->httpStatus = jobP->parser.statusCode;
+    if (jobP->parser.hasContentLength)
+        resultP->contentLength = jobP->parser.contentLength;
+    if (jobP->numberNameP == 0) return;
+    valueP = FindHeader(jobP, jobP->numberNameP);
+    if (valueP == 0) return;
+    for (resultP->number = 0; *valueP >= '0' && *valueP <= '9'; valueP++)
+        resultP->number = resultP->number * 10 + (UInt32)(*valueP - '0');
+    resultP->hasNumber = true;
 }
 
 static UInt16 StepConnected(NetJob **jobPP)
@@ -377,7 +407,7 @@ static UInt16 StepRead(NetJob **jobPP)
             }
             offset++;
             if (jobP->parser.headersComplete) {
-                resultP->httpStatus = jobP->parser.statusCode;
+                ReadHeaders(jobP);
                 if (jobP->parser.redirect) {
                     KeepLocation(jobP);
                     resultP->redirected = true;

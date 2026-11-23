@@ -29,6 +29,7 @@ UInt16 Mp4StreamOpen(Mp4Stream *s, UInt8 *ringP, UInt32 capacity,
     s->ringP = ringP;
     s->capacity = capacity;
     s->totalSize = totalSize;
+    s->live = totalSize == MP4_STREAM_LIVE;
     s->trackP = trackP;
     s->boxP = (UInt8 *)MemPtrNew(MP4_STREAM_BOX_CAPACITY);
     return s->boxP != 0 ? mp4MergeOk : mp4MergeNoMemory;
@@ -41,6 +42,11 @@ void Mp4StreamClose(Mp4Stream *s)
     s->boxP = 0;
     s->segmentsP = 0;
     s->segmentCount = 0;
+}
+
+void Mp4StreamFinish(Mp4Stream *s, UInt32 end)
+{
+    if (s->live && end < s->totalSize) s->totalSize = end;
 }
 
 /* The ring */
@@ -186,6 +192,27 @@ static void ReadSidx(Mp4Stream *s, UInt32 size, UInt32 headerSize)
     s->segmentCount = count;
 }
 
+/* The fragment's start time, from its tfdt. Live times count from the
+ * first fragment's; others must fit in 32 bits. */
+static Boolean SetStartTime(Mp4Stream *s)
+{
+    UInt32 high = s->iter.startTimeHigh, low = s->iter.startTime;
+    if (s->live) {
+        if (!s->haveBase) {
+            s->baseHigh = high;
+            s->baseLow = low;
+            s->haveBase = true;
+        }
+        if (high < s->baseHigh || (high == s->baseHigh && low < s->baseLow))
+            return false;
+        high -= s->baseHigh + (low < s->baseLow ? 1 : 0);
+        low -= s->baseLow;
+    }
+    if (high != 0) return false;
+    s->dts = low;
+    return true;
+}
+
 /* Handles the box at next. */
 static UInt16 ReadBox(Mp4Stream *s)
 {
@@ -209,7 +236,8 @@ static UInt16 ReadBox(Mp4Stream *s)
     if (size < headerSize || size > s->totalSize - s->next)
         return FAIL(s, mp4MergeBadInput);
 
-    if (type == MP4_FOURCC('m', 'o', 'o', 'v') ||
+    /* Each live segment repeats the moov. */
+    if ((type == MP4_FOURCC('m', 'o', 'o', 'v') && !(s->live && s->ready)) ||
         type == MP4_FOURCC('m', 'o', 'o', 'f')) {
         Boolean moov = type == MP4_FOURCC('m', 'o', 'o', 'v');
         UInt32 start = s->next;
@@ -225,7 +253,8 @@ static UInt16 ReadBox(Mp4Stream *s)
                 mp4MergeOk)
             return Fail(s, s->iter.status, s->iter.line);
         /* Without tfdt, fragments follow each other. */
-        if (s->iter.hasStartTime) s->dts = s->iter.startTime;
+        if (s->iter.hasStartTime && !SetStartTime(s))
+            return FAIL(s, mp4MergeUnsupported);
         s->inFragment = true;
         s->havePending = false;
         return CONTINUE;
@@ -305,6 +334,9 @@ static UInt16 Advance(Mp4Stream *s, Mp4Sample *sampleP, UInt8 *bufferP,
                 result = ReadSample(s, sampleP, bufferP, capacity);
                 break;
         }
+        /* A finished live stream may stop partway into a segment. */
+        if (result == mp4StreamWait && s->live && Mp4StreamReceived(s))
+            return mp4StreamEnd;
         if (result != CONTINUE) return result;
     }
 }

@@ -149,8 +149,8 @@ UInt16 Mp4FragBegin(Mp4FragIter *iterP, const UInt8 *moofP, UInt32 moofSize,
             MP4_FOURCC('t', 'f', 'd', 't'), &box) && box.payloadSize >= 8) {
         iterP->hasStartTime = true;
         if (box.payloadP[0] == 1) {
-            if (box.payloadSize < 12 || Mp4Get32(box.payloadP + 4) != 0)
-                return FAIL(iterP, mp4MergeUnsupported);
+            if (box.payloadSize < 12) return FAIL(iterP, mp4MergeUnsupported);
+            iterP->startTimeHigh = Mp4Get32(box.payloadP + 4);
             iterP->startTime = Mp4Get32(box.payloadP + 8);
         } else {
             iterP->startTime = Mp4Get32(box.payloadP + 4);

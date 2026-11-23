@@ -4,6 +4,7 @@
 - [Playback](#playback)
   - [Player](#player)
   - [Streaming](#streaming)
+  - [Live streams](#live-streams)
   - [240p](#240p)
   - [Full screen](#full-screen)
 - [Native code](#native-code)
@@ -88,6 +89,45 @@ same way.
 A downloaded video has no segment index. Seeking goes back to the last
 keyframe before the time asked for, found by reading the sample tables
 from the start (`Mp4ReaderSeek`).
+
+### Live streams
+
+YouTube offers live streams in the same formats (itags 160, 133 and 140),
+with direct URLs. Instead of a length, each format has `targetDurationSec`:
+5 s segments, or 2 s or 1 s for low latency. Segments are numbered.
+`&sq=N` fetches one. Each response's `X-Head-Seqnum` header gives the
+newest number.
+
+- **Self-contained segments.** Each segment is `ftyp`, `moov`, `emsg`,
+  `moof`, `mdat`, and video starts with a keyframe. The feed writes a
+  stream's segments one after another into its ring. `Mp4Stream` reads
+  only the first `moov` and skips the rest.
+- **64-bit times.** `tfdt` counts from the stream's start, at 90 kHz for
+  video. That passes 32 bits after 13 hours. Each stream counts from its
+  first fragment instead. Both start at the same segment, so the two
+  first times are a few ms apart.
+- **Starting.** A one-byte request (`range=0-0`, no `sq`) gives the newest
+  number. Playback starts 15 s before it.
+- **Never ask early.** A request for a segment that is not out yet is held
+  for up to 7.5 s, then answered with 204. That would hold up the other
+  stream, so the feed asks for the next segment only a segment's time
+  after the newest number last changed.
+- **Whole segments.** A range past a segment's end never completes: the
+  server states a longer length than it sends. So a segment is fetched
+  whole, once its ring has room for 1.25 times the largest so far. A
+  dropped connection is resumed with a range up to the stated
+  `Content-Length`.
+- **Waiting for room.** A segment can still be larger than the room left.
+  Its response then waits for the player. If the other stream runs low
+  meanwhile, the player could stop taking from both. So the response is
+  cut, to be finished later with a range.
+- **The end.** With no new segment for 60 s, the stream ends after its
+  last whole segment.
+
+Live streams have no duration and do not seek. `maxDvrDurationSec` says
+the last 12 hours stay available, so seeking back could be added. The
+URLs expire after about 6 hours (`expiresInSeconds`). After that the
+player stops with a message.
 
 ### 240p
 
@@ -190,7 +230,11 @@ build/host/pview search "palm tx"
 build/host/pview info jNQXAC9IVRw
 build/host/pview get jNQXAC9IVRw testdata/media
 host/tests/compare-merge.sh build/host/pview testdata/media jNQXAC9IVRw
+build/host/pview live LIVE_ID testdata/live 10
 ```
+
+`pview live` saves the last segments of a live stream. Each stream goes
+in one file, its segments in a row, for the live tests.
 
 `compare-merge.sh` checks every packet and the decoded output of the merge
 against ffmpeg's.
@@ -221,7 +265,13 @@ outages:
 build/host/playback_sim FILE [LOAD] [--seek AT TO]...
 build/host/playback_sim --stream testdata/media/ID.video.mp4 \
     testdata/media/ID.audio.mp4 30 [OUTAGE_AT SECONDS] [--seek AT TO]...
+build/host/playback_sim --live testdata/live/ID.live.video.mp4 \
+    testdata/live/ID.live.audio.mp4 30 --segment 5
 ```
+
+`build/host/feed_test --live` runs the feed against a fake live server.
+It puts out a segment every few seconds, holds early requests and drops
+connections, then ends the stream.
 
 ### PalmView Bench
 

@@ -516,6 +516,13 @@ static void OpenStreams(Playback *p)
         &p->streams[STREAM_FEED_AUDIO], p->startMs != 0);
 }
 
+/* A stream's share of the memory: its length, or a live stream's rate */
+static UInt32 RingWeight(const Playback *p, UInt16 track)
+{
+    return StreamFeedLive(p->feedP) ? StreamFeedRate(p->feedP, track) / 1024
+        : StreamFeedLength(p->feedP, track) / 1024;
+}
+
 /* Shares the memory left between the two rings, by bitrate. */
 static const Char *AllocateRings(Playback *p)
 {
@@ -524,11 +531,9 @@ static const Char *AllocateRings(Playback *p)
     MemHeapFreeBytes(0, &freeBytes, &maxChunk);
     budget = freeBytes > STREAM_RESERVE ? freeBytes - STREAM_RESERVE : 0;
     if (budget > STREAM_BUFFER_LIMIT) budget = STREAM_BUFFER_LIMIT;
-    total = StreamFeedLength(p->feedP, STREAM_FEED_VIDEO) / 1024 +
-        StreamFeedLength(p->feedP, STREAM_FEED_AUDIO) / 1024 + 1;
+    total = RingWeight(p, STREAM_FEED_VIDEO) + RingWeight(p, STREAM_FEED_AUDIO) + 1;
     for (i = 0; i < 2; i++) {
-        UInt32 size = budget / 1024 * (StreamFeedLength(p->feedP, i) / 1024) /
-            total * 1024;
+        UInt32 size = budget / 1024 * RingWeight(p, i) / total * 1024;
         if (size < STREAM_RING_MINIMUM) size = STREAM_RING_MINIMUM;
         while ((p->ringsP[i] = (UInt8 *)ArmLargeAlloc(size)) == 0) {
             size -= size / 4;
@@ -547,6 +552,8 @@ const Char *PlaybackOpenStream(Playback *p, struct StreamFeed *feedP,
     const Char *errorP;
     MemSet(p, sizeof(*p), 0);
     p->feedP = feedP;
+    /* Live streams always start near the newest segment. */
+    if (StreamFeedLive(feedP)) startMs = 0;
     p->startMs = startMs;
     p->pausedMs = startMs;
     errorP = LoadDecoder(p, large);
@@ -575,8 +582,12 @@ UInt32 PlaybackBufferedMs(const Playback *p, UInt16 track)
     if (!s->ready || s->trackP->timescale == 0) return 0;
     if (track == STREAM_FEED_AUDIO && p->audioFrom > from) from = p->audioFrom;
     buffered = s->writeOffset > from ? s->writeOffset - from : 0;
-    durationMs = ScaleToMs(s->trackP->duration, s->trackP->timescale);
-    perSecond = s->totalSize / (durationMs / 1000UL + 1) + 1;
+    if (StreamFeedLive(p->feedP)) {
+        perSecond = StreamFeedRate(p->feedP, track) + 1;
+    } else {
+        durationMs = ScaleToMs(s->trackP->duration, s->trackP->timescale);
+        perSecond = s->totalSize / (durationMs / 1000UL + 1) + 1;
+    }
     return buffered / perSecond * 1000UL + buffered % perSecond * 1000UL / perSecond;
 }
 
@@ -1010,7 +1021,7 @@ static Int32 StepOnce(Playback *p)
         if (p->soundStarted && !(p->soundInputEnded && p->soundBuffered == 0))
             return (Int32)MsToTicks(100);
         CloseSound(p);
-        p->pausedMs = PlaybackDurationMs(p);
+        p->pausedMs = PlaybackLive(p) ? VideoMs(p) : PlaybackDurationMs(p);
         p->playing = false;
         p->ended = true;
         return evtWaitForever;
@@ -1211,7 +1222,13 @@ UInt32 PlaybackPositionMs(const Playback *p)
 UInt32 PlaybackDurationMs(const Playback *p)
 {
     const Mp4ReadTrack *t = &p->readerP->video;
+    if (PlaybackLive(p)) return 0;
     return t->timescale != 0 ? ScaleToMs(t->duration, t->timescale) : 0;
+}
+
+Boolean PlaybackLive(const Playback *p)
+{
+    return p->feedP != 0 && StreamFeedLive(p->feedP);
 }
 
 void PlaybackSetVolume(Playback *p, UInt16 gain)

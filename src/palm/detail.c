@@ -166,10 +166,14 @@ void BuildInfo(AppState *s)
     if (YtPlayerVideo(playerP, 0) != 0 && playerP->audio.found) {
         UInt16 choice = VideoChoice(s);
         AppendInfoLine(infoP, capacity, kQualityNames[choice]);
-        Append(infoP, capacity, " video ");
-        AppendSize(infoP, capacity, playerP->video[choice].contentLength);
-        Append(infoP, capacity, ", audio ");
-        AppendSize(infoP, capacity, playerP->audio.contentLength);
+        if (playerP->live) {
+            Append(infoP, capacity, " live stream");
+        } else {
+            Append(infoP, capacity, " video ");
+            AppendSize(infoP, capacity, playerP->video[choice].contentLength);
+            Append(infoP, capacity, ", audio ");
+            AppendSize(infoP, capacity, playerP->audio.contentLength);
+        }
     }
 }
 
@@ -220,7 +224,7 @@ void RefreshDetail(AppState *s)
     SetFieldText(InfoField, s->info);
     UpdateInfoScrollBar();
     SetFieldText(ProgressField, s->progress);
-    ShowObject(DownloadButton, idle && YtPlayerPlayable(s->playerP) &&
+    ShowObject(DownloadButton, idle && YtPlayerDownloadable(s->playerP) &&
         !(s->saved && s->quality == s->savedQuality));
     ShowObject(CancelButton, s->task == taskDownload);
     CtlSetEnabled((ControlType *)GetObject(ChannelTrigger),
@@ -331,16 +335,16 @@ void FinishPlayer(AppState *s)
     } else {
         SaveVisitor(s, playerP->visitor);
         s->progress[0] = '\0';
-        if (YtPlayerPlayable(playerP)) {
+        if (YtPlayerDownloadable(playerP)) {
             MakeOutPath(s);
             FindSavedCopy(s);
             DescribeSavedCopy(s);
+        } else if (YtPlayerPlayable(playerP)) {
+            /* Live: nothing saved to look for */
         } else if (StrCompare(playerP->status, "OK") != 0) {
             StrCopy(s->progress, "YouTube: ");
             Append(s->progress, sizeof(s->progress), playerP->reason[0] != '\0'
                 ? playerP->reason : playerP->status);
-        } else if (playerP->live) {
-            StrCopy(s->progress, "Live streams are not supported.");
         } else {
             StrCopy(s->progress, "No 144p or 240p H.264 + AAC streams offered.");
         }

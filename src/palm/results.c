@@ -291,10 +291,6 @@ void OpenResult(AppState *s, UInt16 item)
 {
     StopThumbs(s);
     if (s->task != taskIdle || item >= s->searchP->count) return;
-    if (s->searchP->items[item].live) {
-        SetStatus(s, "Live streams are not supported.");
-        return;
-    }
     s->selected = item;
     FrmPopupForm(DetailForm);
 }

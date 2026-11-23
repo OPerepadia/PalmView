@@ -44,6 +44,8 @@ Downloaded videos are stored in `/PalmView` on the card. Open **Downloads** from
 
 Open **Bookmarks** from the same menu to see bookmarked videos, newest first.
 
+Live streams play the same way, with **Play** only. The player shows how long you have watched instead of a seek bar.
+
 ### Playback controls
 
 - **Play/Pause**: 5-way centre or the **Pause** button
@@ -59,7 +61,8 @@ Open **Bookmarks** from the same menu to see bookmarked videos, newest first.
   - Set the overclock for PalmView only, not as the System Default for all apps.
   - See [240p](docs/technical.md#240p) for measurements.
 - Only H.264 and AAC codecs are supported. YouTube still serves its low-resolution streams in these codecs.
-- Live streams, "made for kids", age-restricted and members-only videos are not supported.
+- "Made for kids", age-restricted and members-only videos are not supported.
+- Live streams play about 15 s behind live. They cannot be seeked or downloaded.
 
 ## Troubleshooting
 

@@ -12,7 +12,12 @@
  * Mp4Streams while it plays. One request at a time, for the stream with
  * the emptier ring, asks for no more than fits. Each stream keeps its own
  * connection open between requests. A connection that drops starts again
- * where it stopped. Nothing is written to storage. */
+ * where it stopped. Nothing is written to storage.
+ *
+ * A live stream comes in numbered segments, a few seconds each. The feed
+ * asks for the newest one's number first, then starts LIVE_BEHIND_SECONDS
+ * back and fetches each segment whole, never one YouTube does not have
+ * yet. Each stream gets its segments one after another. */
 
 #define STREAM_FEED_VIDEO 0
 #define STREAM_FEED_AUDIO 1
@@ -24,14 +29,21 @@ typedef struct StreamFeed StreamFeed;
 
 /* The formats must stay valid while the feed exists. Redirects rewrite
  * their URLs. seconds, the video's length, sets how fast to read; 0 if
- * unknown. Returns 0 if out of memory. */
+ * unknown. live: the formats are a live stream's. Returns 0 if out of
+ * memory. */
 StreamFeed *StreamFeedNew(const NetJobConfig *configP, const YtClient *clientP,
-                          YtFormat *videoP, YtFormat *audioP, UInt32 seconds);
+                          YtFormat *videoP, YtFormat *audioP, UInt32 seconds,
+                          Boolean live);
 void StreamFeedFree(StreamFeed *f);
 
 /* The rest is what the player uses. */
 
+/* MP4_STREAM_LIVE for a live stream */
 UInt32 StreamFeedLength(const StreamFeed *f, UInt16 track);
+Boolean StreamFeedLive(const StreamFeed *f);
+/* A live stream's bytes per second: what its segments so far averaged,
+ * or YouTube's figure before the first. */
+UInt32 StreamFeedRate(const StreamFeed *f, UInt16 track);
 /* Downloads from the start into the streams, opened with the lengths
  * above. With headersFirst, each stops after its segment index (where
  * the format says it ends) until StreamFeedSeek moves it on. */

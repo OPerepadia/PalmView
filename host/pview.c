@@ -63,6 +63,17 @@ typedef struct Exchange {
     UInt16 status;
 } Exchange;
 
+/* X-Head-Seqnum of the last reply, the newest segment of a live stream */
+static UInt32 gNewestSegment;
+static Boolean gHasNewest;
+
+static void ReadNewest(const HttpParser *parserP)
+{
+    const char *p = strstr(parserP->headers, "\nX-Head-Seqnum:");
+    gHasNewest = p != 0;
+    if (p != 0) gNewestSegment = (UInt32)strtoul(p + 16, 0, 10);
+}
+
 /* Sends a request over TLS and feeds the reply to the HTTP parser, which
  * passes the body to bodyProcP. Returns the HTTP status or 0 on failure. */
 static UInt16 HttpsExchange(const char *hostP, const Char *requestP,
@@ -123,6 +134,7 @@ static UInt16 HttpsExchange(const char *hostP, const Char *requestP,
         }
     }
     status = exchange.parser.statusCode;
+    ReadNewest(&exchange.parser);
 done:
     if (sslP != 0) SSL_free(sslP);
     if (fd >= 0) close(fd);
@@ -247,11 +259,13 @@ static Boolean LoadPlayer(const char *videoIdP, YtPlayer *playerP)
         playerP->status, playerP->reason, playerP->title, playerP->author,
         (unsigned long)playerP->lengthSeconds, playerP->live ? " (live)" : "");
     if (playerP->video[0].found)
-        printf("video: itag %u, %lu bytes\n", playerP->video[0].itag,
-            (unsigned long)playerP->video[0].contentLength);
+        printf("video: itag %u, %lu bytes, %lu b/s, segments %u s\n",
+            playerP->video[0].itag, (unsigned long)playerP->video[0].contentLength,
+            (unsigned long)playerP->video[0].bitrate, playerP->video[0].segmentSeconds);
     if (playerP->audio.found)
-        printf("audio: itag %u, %lu bytes\n", playerP->audio.itag,
-            (unsigned long)playerP->audio.contentLength);
+        printf("audio: itag %u, %lu bytes, %lu b/s, segments %u s\n",
+            playerP->audio.itag, (unsigned long)playerP->audio.contentLength,
+            (unsigned long)playerP->audio.bitrate, playerP->audio.segmentSeconds);
     return true;
 }
 
@@ -296,6 +310,82 @@ static Boolean Download(const YtFormat *formatP, const char *pathP)
     fprintf(stderr, "\n");
     fclose(fileP);
     return true;
+}
+
+static Int16 Discard(void *contextP, const UInt8 *dataP, UInt16 length)
+{
+    (void)contextP; (void)dataP; (void)length;
+    return 0;
+}
+
+/* Appends live segments from first on, whole, to pathP. */
+static Boolean DownloadSegments(const YtFormat *formatP, UInt32 first,
+                                UInt32 count, const char *pathP)
+{
+    static Char request[YT_REQUEST_CAPACITY];
+    Char host[128];
+    const Char *pathPartP;
+    FILE *fileP;
+    UInt32 i;
+    if (!YtSplitUrl(formatP->url, host, sizeof(host), &pathPartP) ||
+        (fileP = fopen(pathP, "wb")) == 0) return false;
+    for (i = 0; i < count; i++) {
+        UInt16 length = YtBuildSegmentRequest(&gClient, formatP->url, first + i,
+            0, YT_WHOLE_SEGMENT, false, request, sizeof(request));
+        UInt16 status = HttpsExchange(host, request, length, WriteFile, fileP);
+        if (status != 200) {
+            fprintf(stderr, "segment %lu failed: HTTP %u\n",
+                (unsigned long)(first + i), status);
+            fclose(fileP);
+            return false;
+        }
+        fprintf(stderr, "\r%s: segment %lu, %ld bytes", pathP,
+            (unsigned long)(first + i), ftell(fileP));
+    }
+    fprintf(stderr, "\n");
+    fclose(fileP);
+    return true;
+}
+
+/* Saves the last count segments of a live stream's video and sound, each
+ * stream as one file of its segments in a row, and the segment length in
+ * seconds in ID.live.seconds. */
+static int Live(const char *videoIdP, const char *dirP, UInt32 count)
+{
+    static YtPlayer player;
+    static Char request[YT_REQUEST_CAPACITY];
+    char videoPath[512], audioPath[512];
+    Char host[128];
+    const Char *pathPartP;
+    FILE *fileP;
+    UInt16 length, status;
+    UInt32 first;
+    if (!LoadPlayer(videoIdP, &player)) return 1;
+    if (!player.live || !YtPlayerPlayable(&player)) {
+        fprintf(stderr, "not a playable live stream\n");
+        return 3;
+    }
+    length = YtBuildSegmentRequest(&gClient, player.audio.url, YT_NEWEST_SEGMENT,
+        0, 0, false, request, sizeof(request));
+    YtSplitUrl(player.audio.url, host, sizeof(host), &pathPartP);
+    status = HttpsExchange(host, request, length, Discard, 0);
+    if (status != 200 || !gHasNewest) {
+        fprintf(stderr, "no newest segment: HTTP %u\n", status);
+        return 1;
+    }
+    first = gNewestSegment > count ? gNewestSegment - count : 0;
+    printf("newest segment %lu, saving %lu from %lu\n",
+        (unsigned long)gNewestSegment, (unsigned long)count, (unsigned long)first);
+    snprintf(videoPath, sizeof(videoPath), "%s/%s.live.video.mp4", dirP, videoIdP);
+    snprintf(audioPath, sizeof(audioPath), "%s/%s.live.audio.mp4", dirP, videoIdP);
+    if (!DownloadSegments(YtPlayerVideo(&player, 0), first, count, videoPath) ||
+        !DownloadSegments(&player.audio, first, count, audioPath))
+        return 1;
+    snprintf(videoPath, sizeof(videoPath), "%s/%s.live.seconds", dirP, videoIdP);
+    if ((fileP = fopen(videoPath, "w")) == 0) return 1;
+    fprintf(fileP, "%u\n", player.audio.segmentSeconds);
+    fclose(fileP);
+    return 0;
 }
 
 /* Host implementation of the merge I/O interface. */
@@ -363,8 +453,8 @@ static int Get(const char *videoIdP, const char *dirP)
     char videoPath[512], audioPath[512], outPath[640];
     Char name[80];
     if (!LoadPlayer(videoIdP, &player)) return 1;
-    if (!YtPlayerPlayable(&player)) {
-        fprintf(stderr, "not playable\n");
+    if (!YtPlayerDownloadable(&player)) {
+        fprintf(stderr, player.live ? "a live stream\n" : "not playable\n");
         return 3;
     }
     snprintf(videoPath, sizeof(videoPath), "%s/%s.video.mp4", dirP, videoIdP);
@@ -387,9 +477,11 @@ int main(int argc, char **argv)
         return Channel(argv[2], argc == 4 ? atoi(argv[3]) : 1);
     if (argc == 3 && strcmp(argv[1], "info") == 0) return Info(argv[2]);
     if (argc == 4 && strcmp(argv[1], "get") == 0) return Get(argv[2], argv[3]);
+    if ((argc == 4 || argc == 5) && strcmp(argv[1], "live") == 0)
+        return Live(argv[2], argv[3], argc == 5 ? (UInt32)atoi(argv[4]) : 6);
     if (argc == 5 && strcmp(argv[1], "merge") == 0)
         return Merge(argv[2], argv[3], argv[4]);
     fprintf(stderr, "usage: pview search QUERY [PAGES] | channel ID [PAGES] | info ID | get ID DIR | "
-        "merge VIDEO AUDIO OUT\n");
+        "live ID DIR [SEGMENTS] | merge VIDEO AUDIO OUT\n");
     return 2;
 }

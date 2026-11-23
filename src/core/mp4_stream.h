@@ -18,10 +18,16 @@
  *       decode bufferP...
  *
  * The segment index (sidx) after the moov, when there is one, lets it
- * start again at any segment. */
+ * start again at any segment.
+ *
+ * A live stream is its segments one after another, each with its own
+ * moov, until Mp4StreamFinish. Only the first moov is read. Its fragment
+ * times pass 32 bits, so they count from its first fragment's. */
 
 /* Largest moov or moof kept. YouTube's are under 2 KB. */
 #define MP4_STREAM_BOX_CAPACITY 16384UL
+/* The totalSize of a live stream */
+#define MP4_STREAM_LIVE 0xFFFFFFFFUL
 
 typedef enum Mp4StreamResult {
     mp4StreamSample = 0,    /* a sample was copied out */
@@ -62,14 +68,21 @@ typedef struct Mp4Stream {
     UInt32 dts;
     Mp4Segment *segmentsP;  /* 0 until the sidx is read */
     UInt16 segmentCount;
+    Boolean live;
+    Boolean haveBase;       /* live: the first fragment's time is known */
+    UInt32 baseHigh;
+    UInt32 baseLow;
 } Mp4Stream;
 
-/* totalSize is the stream's length in bytes. Once the moov has arrived,
+/* totalSize is the stream's length in bytes, or MP4_STREAM_LIVE. Once the moov has arrived,
  * *trackP describes the track as Mp4ReaderOpen would. Returns mp4MergeOk
  * or mp4MergeNoMemory. */
 UInt16 Mp4StreamOpen(Mp4Stream *s, UInt8 *ringP, UInt32 capacity,
                      UInt32 totalSize, Mp4ReadTrack *trackP);
 void Mp4StreamClose(Mp4Stream *s);
+/* A live stream ends at end, where the first segment that will not
+ * arrive starts. */
+void Mp4StreamFinish(Mp4Stream *s, UInt32 end);
 
 /* Bytes the ring can take now. */
 UInt32 Mp4StreamSpace(const Mp4Stream *s);

@@ -22,7 +22,7 @@
  * It can also play YouTube's two streams while they download (a
  * StreamFeed). The compressed data waits in RAM rings, and the clock stops
  * to buffer whenever either stream runs dry. Streams can seek, to the
- * start of a segment. */
+ * start of a segment. Live streams cannot seek, and have no duration. */
 
 #define PLAYBACK_LEVELS 4
 #define EXTRA_BLOCKS 4
@@ -187,7 +187,9 @@ UInt32 PlaybackSeek(Playback *p, UInt32 ms);
 /* Seeks about ms from the position, backward or forward. */
 UInt32 PlaybackSkip(Playback *p, Boolean forward, UInt32 ms);
 UInt32 PlaybackPositionMs(const Playback *p);
+/* 0 for a live stream */
 UInt32 PlaybackDurationMs(const Playback *p);
+Boolean PlaybackLive(const Playback *p);
 /* Playback time in a stream's ring; 0xFFFFFFFF once all of it is in. */
 UInt32 PlaybackBufferedMs(const Playback *p, UInt16 track);
 /* Why streaming stopped, or 0. */

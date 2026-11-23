@@ -360,7 +360,8 @@ $(FEED_TEST): host/tests/feed_test.c src/palm/stream_feed.c src/palm/stream_feed
 
 # Offline tests. JSON samples in testdata/ (not committed) are compared
 # with Python's parser when present. Downloaded streams in testdata/media/
-# are read as they would arrive over the network, through small rings.
+# are read as they would arrive over the network, through small rings, and
+# so are live segments in testdata/live/ (pview live).
 test: $(JSON_DUMP) $(UNIT_TESTS) $(PVIEW) $(STREAM_TEST) $(READ_SEEK_TEST) $(FEED_TEST) \
 		$(RGB_TEST)
 	$(UNIT_TESTS)
@@ -377,6 +378,13 @@ test: $(JSON_DUMP) $(UNIT_TESTS) $(PVIEW) $(STREAM_TEST) $(READ_SEEK_TEST) $(FEE
 			$(READ_SEEK_TEST) $(HOST_DIR)/$$id.merged.mp4 $$seed || exit 1; \
 			$(FEED_TEST) $$video $$audio 191 320 $$seed || exit 1; \
 			$(FEED_TEST) $$video $$audio 48 48 $$seed || exit 1; \
+		done; \
+	done
+	@for video in $(wildcard testdata/live/*.live.video.mp4); do \
+		base=$${video%.video.mp4}; seconds=$$(cat $$base.seconds); \
+		for seed in 1 2 3; do \
+			$(FEED_TEST) --live $$video $$base.audio.mp4 $$seconds 191 320 $$seed || exit 1; \
+			$(FEED_TEST) --live $$video $$base.audio.mp4 $$seconds 48 48 $$seed || exit 1; \
 		done; \
 	done
 	@for file in host/tests/edge.json $(wildcard testdata/*.json); do \
@@ -441,6 +449,13 @@ test-playback: $(PLAYBACK_SIM)
 		out=$$($(PLAYBACK_SIM) --stream $$video $$audio 40 \
 			--seek 10 120 --seek 30 5 --seek 50 3600) || { echo "$$out"; exit 1; }; \
 		echo "$$out" | grep -E "^seek|again|sound:"; \
+	done
+	@for video in $(wildcard testdata/live/*.live.video.mp4); do \
+		base=$${video%.video.mp4}; \
+		echo "== live $$video"; \
+		out=$$($(PLAYBACK_SIM) --live $$video $$base.audio.mp4 40 10 5 \
+			--segment $$(cat $$base.seconds)) || { echo "$$out"; exit 1; }; \
+		echo "$$out" | tail -4; \
 	done
 
 # Runs the packaged ARM module in a PXA270 emulator and checks it decodes

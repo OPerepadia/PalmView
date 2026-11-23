@@ -257,23 +257,36 @@ Boolean YtSplitUrl(const Char *urlP, Char *hostP, UInt16 hostCapacity,
     return true;
 }
 
-UInt16 YtBuildMediaRequest(const YtClient *clientP, const Char *urlP,
-                           UInt32 start, UInt32 end, Boolean keepAlive,
-                           Char *requestP, UInt16 capacity)
+static Boolean AppendParameter(Char *requestP, UInt16 capacity,
+                               UInt16 *lengthP, const Char *nameP)
+{
+    return TextAppend(requestP, capacity, lengthP,
+            StrChr(requestP, '?') != 0 ? "&" : "?") &&
+        TextAppend(requestP, capacity, lengthP, nameP);
+}
+
+UInt16 YtBuildSegmentRequest(const YtClient *clientP, const Char *urlP,
+                             UInt32 sequence, UInt32 start, UInt32 end,
+                             Boolean keepAlive, Char *requestP,
+                             UInt16 capacity)
 {
     Char host[128];
     const Char *pathP;
     UInt16 length = 0;
     Boolean ok;
     if (!YtSplitUrl(urlP, host, sizeof(host), &pathP)) return 0;
+    if (capacity != 0) requestP[0] = '\0';
     ok = TextAppend(requestP, capacity, &length, "GET ") &&
-        TextAppend(requestP, capacity, &length, pathP) &&
-        TextAppend(requestP, capacity, &length,
-            StrChr(pathP, '?') != 0 ? "&range=" : "?range=") &&
-        TextAppendUInt32(requestP, capacity, &length, start) &&
-        TextAppend(requestP, capacity, &length, "-") &&
-        TextAppendUInt32(requestP, capacity, &length, end) &&
-        TextAppend(requestP, capacity, &length, " HTTP/1.1\r\nHost: ") &&
+        TextAppend(requestP, capacity, &length, pathP);
+    if (ok && sequence != YT_NEWEST_SEGMENT)
+        ok = AppendParameter(requestP, capacity, &length, "sq=") &&
+            TextAppendUInt32(requestP, capacity, &length, sequence);
+    if (ok && end != YT_WHOLE_SEGMENT)
+        ok = AppendParameter(requestP, capacity, &length, "range=") &&
+            TextAppendUInt32(requestP, capacity, &length, start) &&
+            TextAppend(requestP, capacity, &length, "-") &&
+            TextAppendUInt32(requestP, capacity, &length, end);
+    ok = ok && TextAppend(requestP, capacity, &length, " HTTP/1.1\r\nHost: ") &&
         TextAppend(requestP, capacity, &length, host) &&
         TextAppend(requestP, capacity, &length, "\r\nUser-Agent: ") &&
         TextAppend(requestP, capacity, &length, clientP->userAgent) &&
@@ -282,6 +295,14 @@ UInt16 YtBuildMediaRequest(const YtClient *clientP, const Char *urlP,
         TextAppend(requestP, capacity, &length,
             keepAlive ? "keep-alive\r\n\r\n" : "close\r\n\r\n");
     return ok ? length : 0;
+}
+
+UInt16 YtBuildMediaRequest(const YtClient *clientP, const Char *urlP,
+                           UInt32 start, UInt32 end, Boolean keepAlive,
+                           Char *requestP, UInt16 capacity)
+{
+    return YtBuildSegmentRequest(clientP, urlP, YT_NEWEST_SEGMENT, start, end,
+        keepAlive, requestP, capacity);
 }
 
 UInt16 YtBuildThumbRequest(const YtClient *clientP, const Char *videoIdP,
@@ -320,7 +341,8 @@ Boolean YtApplyRedirect(Char *urlP, UInt16 capacity, const Char *locationP)
         p++;
         for (endP = p; *endP != '\0' && *endP != '&'; endP++) {}
         size = (UInt16)(endP - p);
-        if (size != 0 && StrNCompare(p, "range=", 6) != 0) {
+        if (size != 0 && StrNCompare(p, "range=", 6) != 0 &&
+            StrNCompare(p, "sq=", 3) != 0) {
             if (!first) urlP[length++] = '&';
             MemMove(urlP + length, p, size);
             length += size;
@@ -352,6 +374,8 @@ static void ResetCurrentFormat(YtPlayer *p)
     p->curItag = 0;
     p->curLength = 0;
     p->curIndexEnd = 0;
+    p->curBitrate = 0;
+    p->curSegmentSeconds = 0;
     p->curHasUrl = false;
     p->curUnusable = false;
     p->curDefault = false;
@@ -401,6 +425,12 @@ static void FormatValue(YtPlayer *p, const JsonScanner *s, UInt16 type,
         }
     } else if (JsonPathFrom(s, 3, "contentLength")) {
         TextParseUInt32(textP, &p->curLength);
+    } else if (JsonPathFrom(s, 3, "bitrate")) {
+        TextParseUInt32(textP, &p->curBitrate);
+    } else if (JsonPathFrom(s, 3, "targetDurationSec")) {
+        UInt32 seconds = 0;
+        if (TextParseUInt32(textP, &seconds) && seconds < 3600)
+            p->curSegmentSeconds = (UInt16)seconds;
     } else if (JsonPathFrom(s, 3, "indexRange/end")) {
         if (TextParseUInt32(textP, &p->curIndexEnd)) p->curIndexEnd++;
     } else if (JsonPathFrom(s, 3, "signatureCipher") ||
@@ -453,6 +483,8 @@ static void TakeFormat(YtFormat *formatP, const YtPlayer *p)
     formatP->itag = p->curItag;
     formatP->contentLength = p->curLength;
     formatP->indexEnd = p->curIndexEnd;
+    formatP->bitrate = p->curBitrate;
+    formatP->segmentSeconds = p->curSegmentSeconds;
     StrCopy(formatP->url, p->curUrl);
 }
 
@@ -462,8 +494,11 @@ Boolean YtPlayerEnd(void *contextP, const JsonScanner *s)
     UInt16 rank, i;
     if (s->depth != 3 || !JsonPathIs(s, "streamingData/adaptiveFormats/#"))
         return true;
-    /* contentLength is required: downloads are made in ranges. */
-    if (p->curHasUrl && !p->curUnusable && p->curLength != 0) {
+    /* Videos are fetched in ranges, so they need contentLength. Live
+     * streams come in numbered segments instead. isLive comes after the
+     * formats, so YtPlayerPlayable checks which kind each is. */
+    if (p->curHasUrl && !p->curUnusable &&
+        (p->curLength != 0 || p->curSegmentSeconds != 0)) {
         for (i = 0; i < YT_VIDEO_CHOICES; i++)
             if (p->curItag == p->videoItags[i] && !p->video[i].found)
                 TakeFormat(&p->video[i], p);
@@ -487,10 +522,29 @@ const YtFormat *YtPlayerVideo(const YtPlayer *playerP, UInt16 choice)
     return 0;
 }
 
+static Boolean FormatFits(const YtPlayer *playerP, const YtFormat *formatP)
+{
+    return playerP->live ? formatP->segmentSeconds != 0
+        : formatP->contentLength != 0;
+}
+
+/* A video's formats all have a length, a live stream's all have
+ * segments. */
 Boolean YtPlayerPlayable(const YtPlayer *playerP)
 {
-    return StringIs(playerP->status, "OK") && !playerP->live &&
-        YtPlayerVideo(playerP, 0) != 0 && playerP->audio.found;
+    UInt16 i;
+    if (!StringIs(playerP->status, "OK") || YtPlayerVideo(playerP, 0) == 0 ||
+        !playerP->audio.found || !FormatFits(playerP, &playerP->audio))
+        return false;
+    for (i = 0; i < YT_VIDEO_CHOICES; i++)
+        if (playerP->video[i].found && !FormatFits(playerP, &playerP->video[i]))
+            return false;
+    return true;
+}
+
+Boolean YtPlayerDownloadable(const YtPlayer *playerP)
+{
+    return !playerP->live && YtPlayerPlayable(playerP);
 }
 
 /* Search responses */

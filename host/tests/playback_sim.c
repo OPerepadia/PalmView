@@ -9,6 +9,11 @@
  *   playback_sim FILE.mp4 [LOAD] [PAUSE_AT_SECONDS] [--seek AT TO]...
  *   playback_sim --stream VIDEO.mp4 AUDIO.mp4 KB_PER_S [OUTAGE_AT SECONDS]
  *       [--seek AT TO]... [--start SECONDS]
+ *   playback_sim --live VIDEO.mp4 AUDIO.mp4 KB_PER_S [OUTAGE_AT SECONDS]
+ *       [--segment SECONDS]
+ *
+ * --live streams files of live segments in a row (pview live), which end
+ * where the files do. --segment gives their length, 5 s by default.
  *
  * The second form streams YouTube's two DASH files over a simulated
  * network of the given speed, which can drop out for a while. --start
@@ -204,8 +209,29 @@ struct StreamFeed {
 
 static StreamFeed gFeed;
 static UInt32 gStartMs;
+static Boolean gLive;
+static UInt32 gSegmentSeconds = 5;
 
-UInt32 StreamFeedLength(const StreamFeed *f, UInt16 track) { return f->lengths[track]; }
+UInt32 StreamFeedLength(const StreamFeed *f, UInt16 track)
+{
+    return gLive ? MP4_STREAM_LIVE : f->lengths[track];
+}
+
+Boolean StreamFeedLive(const StreamFeed *f) { (void)f; return gLive; }
+
+/* A live file's bytes per second, from how many segments it holds */
+UInt32 StreamFeedRate(const StreamFeed *f, UInt16 track)
+{
+    static UInt8 header[8];
+    UInt32 offset = 0, segments = 0;
+    while (fseek(f->files[track], (long)offset, SEEK_SET) == 0 &&
+           fread(header, 1, 8, f->files[track]) == 8) {
+        if (memcmp(header + 4, "ftyp", 4) == 0) segments++;
+        offset += (UInt32)header[0] << 24 | (UInt32)header[1] << 16 |
+            (UInt32)header[2] << 8 | header[3];
+    }
+    return segments == 0 ? 0 : f->lengths[track] / segments / gSegmentSeconds;
+}
 const Char *StreamFeedError(const StreamFeed *f) { (void)f; return 0; }
 UInt32 StreamFeedReceived(const StreamFeed *f) { return f->received; }
 void StreamFeedStop(StreamFeed *f) { (void)f; }
@@ -267,6 +293,8 @@ void StreamFeedStep(StreamFeed *f, Boolean playing)
             f->backlog[i] -= chunk;
             n -= chunk;
         }
+        if (gLive && f->offsets[i] == f->lengths[i])
+            Mp4StreamFinish(f->streams[i], f->lengths[i]);
     }
 }
 
@@ -431,7 +459,8 @@ int main(int argc, char **argv)
     double seekAt[MAX_SEEKS], seekTo[MAX_SEEKS];
     int seeks = 0, seeksDone = 0;
     RectangleType bounds = { { 0, 0 }, { 160, 90 } };
-    Boolean streaming = argc > 1 && strcmp(argv[1], "--stream") == 0;
+    Boolean streaming = argc > 1 && (strcmp(argv[1], "--stream") == 0 ||
+        strcmp(argv[1], "--live") == 0);
     int pauseArg = streaming ? 7 : 3;
     double pauseAtMs = argc > pauseArg ? atof(argv[pauseArg]) * 1000.0 : -1;
     double pausedFor = 0, nextReport = 1000, waitedMs = 0, seekWaitMs = 0;
@@ -450,6 +479,9 @@ int main(int argc, char **argv)
         } else if (argc > 2 && strcmp(argv[argc - 2], "--start") == 0) {
             gStartMs = (UInt32)(atof(argv[argc - 1]) * 1000.0);
             argc -= 2;
+        } else if (argc > 2 && strcmp(argv[argc - 2], "--segment") == 0) {
+            gSegmentSeconds = (UInt32)atoi(argv[argc - 1]);
+            argc -= 2;
         } else {
             break;
         }
@@ -461,6 +493,7 @@ int main(int argc, char **argv)
             "[--start SECONDS]\n");
         return 2;
     }
+    gLive = argc > 1 && strcmp(argv[1], "--live") == 0;
     if (!streaming && argc > 2) gLoad = atof(argv[2]);
     gScreenP = (UInt8 *)LowAlloc(640 * 480);
     errorP = streaming ? OpenFeed(argv, argc) : PlaybackOpen(p, argv[1]);
@@ -565,8 +598,18 @@ int main(int argc, char **argv)
     if (streaming)
         printf("streaming: %u waits, %.1f s waiting, output %ux%u\n",
             (unsigned)p->bufferings, waitedMs / 1000, p->width, p->height);
-    printf("clock drift vs. duration: %+.1f s\n",
-        (gNowMs - pausedFor - waitedMs) / 1000 - PlaybackDurationMs(p) / 1000.0);
+    if (gLive) {
+        printf("live: played to ");
+        PrintClock(PlaybackPositionMs(p));
+        printf(", duration %u\n", (unsigned)PlaybackDurationMs(p));
+        if (PlaybackDurationMs(p) != 0 || PlaybackCanSeek(p)) {
+            printf("FAIL: a live stream has a duration or seeks\n");
+            failed = 1;
+        }
+    } else {
+        printf("clock drift vs. duration: %+.1f s\n",
+            (gNowMs - pausedFor - waitedMs) / 1000 - PlaybackDurationMs(p) / 1000.0);
+    }
     if (!p->ended || p->decodeErrors != 0 || p->audioErrors != 0 ||
         (p->catchUps == 0 && p->seeks == 0 &&
          p->shown + p->skipped != video.frames)) {

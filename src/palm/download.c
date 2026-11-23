@@ -142,7 +142,7 @@ void StartDownload(AppState *s)
     UInt32 freeBytes = 0, needed;
     Err error;
     StopThumbs(s);
-    if (s->task != taskIdle || !YtPlayerPlayable(playerP)) return;
+    if (s->task != taskIdle || !YtPlayerDownloadable(playerP)) return;
     error = StoreOpenVolume(&s->volume);
     if (error != errNone) {
         SetProgressText(s, "No memory card found.");

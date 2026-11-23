@@ -232,7 +232,8 @@ static void UpdatePlayStatus(AppState *s)
     AppendClock(textP, capacity, s->seekDragging || s->skipPending
         ? s->seekTargetMs : PlaybackPositionMs(p));
     Append(textP, capacity, " / ");
-    AppendClock(textP, capacity, PlaybackDurationMs(p));
+    if (PlaybackLive(p)) Append(textP, capacity, "Live");
+    else AppendClock(textP, capacity, PlaybackDurationMs(p));
     if (s->seekDragging || s->skipPending) Append(textP, capacity, "  Seek");
     else if (p->ended) Append(textP, capacity, "  Ended");
     else if (!p->playing) Append(textP, capacity, "  Paused");
@@ -327,7 +328,7 @@ static const Char *StartPlayback(AppState *s, UInt32 startMs)
     for (;;) {
         s->feedP = StreamFeedNew(&s->netConfig, &s->client,
             &s->playerP->video[choice], &s->playerP->audio,
-            s->playerP->lengthSeconds);
+            s->playerP->lengthSeconds, s->playerP->live);
         if (s->feedP == 0) {
             MemSet(s->playbackP, sizeof(Playback), 0);
             return "Out of memory.";

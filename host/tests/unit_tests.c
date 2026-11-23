@@ -200,6 +200,11 @@ static void TestClientParse(void)
     ExpectText("client device kept", client.deviceMake, "Apple");
 }
 
+static int StartsWith(const char *textP, const char *prefixP)
+{
+    return strncmp(textP, prefixP, strlen(prefixP)) == 0;
+}
+
 static void TestUrls(void)
 {
     YtClient client;
@@ -230,6 +235,18 @@ static void TestUrls(void)
     Expect("keep-alive request built", length != 0 &&
         strstr(request, "Connection: keep-alive\r\n\r\n") ==
             request + length - strlen("Connection: keep-alive\r\n\r\n"));
+    length = YtBuildSegmentRequest(&client, "https://a.example/videoplayback?a=1",
+        1528197, 0, YT_WHOLE_SEGMENT, true, request, sizeof(request));
+    Expect("segment request", length != 0 &&
+        StartsWith(request, "GET /videoplayback?a=1&sq=1528197 HTTP/1.1\r\n"));
+    length = YtBuildSegmentRequest(&client, "https://a.example/videoplayback?a=1",
+        12, 300, 999, true, request, sizeof(request));
+    Expect("rest of a segment", length != 0 &&
+        StartsWith(request, "GET /videoplayback?a=1&sq=12&range=300-999 HTTP"));
+    length = YtBuildSegmentRequest(&client, "https://a.example/videoplayback",
+        YT_NEWEST_SEGMENT, 0, 0, true, request, sizeof(request));
+    Expect("newest segment number", length != 0 &&
+        StartsWith(request, "GET /videoplayback?range=0-0 HTTP"));
 }
 
 static void TestRedirects(void)
@@ -246,6 +263,8 @@ static void TestRedirects(void)
     ExpectText("redirect drops trailing range", url, "https://a.example/v?b=2");
     YtApplyRedirect(url, sizeof(url), "https://a.example/v?range=5-9");
     ExpectText("redirect without parameters", url, "https://a.example/v");
+    YtApplyRedirect(url, sizeof(url), "https://a.example/v?sq=7&b=2&range=5-9");
+    ExpectText("redirect drops the segment", url, "https://a.example/v?b=2");
     YtApplyRedirect(url, sizeof(url), "https://a.example/v?arange=1&rangex=2");
     ExpectText("redirect keeps similar names", url,
         "https://a.example/v?arange=1&rangex=2");
@@ -360,6 +379,31 @@ static void ParsePlayer(YtPlayer *playerP, const char *jsonP)
     JsonScanInit(&scanner, value, sizeof(value), YtPlayerValue, YtPlayerEnd, playerP);
     JsonScanFeed(&scanner, (const UInt8 *)jsonP, (UInt16)strlen(jsonP));
     Expect("audio tracks parsed", JsonScanFinish(&scanner) == jsonOk);
+}
+
+/* Live formats have no length but segments; isLive comes after them. */
+static void TestLiveFormats(void)
+{
+    static YtPlayer player;
+    ParsePlayer(&player, "{\"playabilityStatus\":{\"status\":\"OK\"},"
+        "\"streamingData\":{\"adaptiveFormats\":["
+        "{\"itag\":160,\"url\":\"https://a.example/v\",\"bitrate\":192223,"
+        "\"targetDurationSec\":5,\"maxDvrDurationSec\":43200},"
+        "{\"itag\":140,\"url\":\"https://a.example/a\",\"bitrate\":144000,"
+        "\"targetDurationSec\":5}]},"
+        "\"videoDetails\":{\"isLive\":true,\"lengthSeconds\":\"0\"}}");
+    Expect("live video found", player.video[0].found &&
+        player.video[0].segmentSeconds == 5 && player.video[0].bitrate == 192223 &&
+        player.video[0].contentLength == 0);
+    Expect("live audio found", player.audio.found && player.audio.segmentSeconds == 5);
+    Expect("live plays", player.live && YtPlayerPlayable(&player));
+    Expect("live does not download", !YtPlayerDownloadable(&player));
+    ParsePlayer(&player, "{\"playabilityStatus\":{\"status\":\"OK\"},"
+        "\"streamingData\":{\"adaptiveFormats\":["
+        "{\"itag\":160,\"url\":\"https://a.example/v\",\"targetDurationSec\":5},"
+        "{\"itag\":140,\"url\":\"https://a.example/a\",\"contentLength\":\"9\"}]},"
+        "\"videoDetails\":{\"isLive\":false}}");
+    Expect("segments without live refused", !YtPlayerPlayable(&player));
 }
 
 /* The default track of a dubbed video wins, wherever it is listed. */
@@ -694,6 +738,7 @@ int main(void)
     TestApiRequests();
     TestPlayerFormats();
     TestAudioTracks();
+    TestLiveFormats();
     TestSearchPages();
     TestThumbnails();
     TestThumbBadge();
