@@ -381,10 +381,10 @@ test: $(JSON_DUMP) $(UNIT_TESTS) $(PVIEW) $(STREAM_TEST) $(READ_SEEK_TEST) $(FEE
 		done; \
 	done
 	@for video in $(wildcard testdata/live/*.live.video.mp4); do \
-		base=$${video%.video.mp4}; seconds=$$(cat $$base.seconds); \
+		base=$${video%.video.mp4}; \
 		for seed in 1 2 3; do \
-			$(FEED_TEST) --live $$video $$base.audio.mp4 $$seconds 191 320 $$seed || exit 1; \
-			$(FEED_TEST) --live $$video $$base.audio.mp4 $$seconds 48 48 $$seed || exit 1; \
+			$(FEED_TEST) --live $$video $$base.audio.mp4 191 320 $$seed || exit 1; \
+			$(FEED_TEST) --live $$video $$base.audio.mp4 48 48 $$seed || exit 1; \
 		done; \
 	done
 	@for file in host/tests/edge.json $(wildcard testdata/*.json); do \
@@ -453,8 +453,8 @@ test-playback: $(PLAYBACK_SIM)
 	@for video in $(wildcard testdata/live/*.live.video.mp4); do \
 		base=$${video%.video.mp4}; \
 		echo "== live $$video"; \
-		out=$$($(PLAYBACK_SIM) --live $$video $$base.audio.mp4 40 10 5 \
-			--segment $$(cat $$base.seconds)) || { echo "$$out"; exit 1; }; \
+		out=$$($(PLAYBACK_SIM) --live $$video $$base.audio.mp4 40 10 5) || \
+			{ echo "$$out"; exit 1; }; \
 		echo "$$out" | tail -4; \
 	done
 

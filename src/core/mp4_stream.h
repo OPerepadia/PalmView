@@ -68,15 +68,15 @@ typedef struct Mp4Stream {
     UInt32 dts;
     Mp4Segment *segmentsP;  /* 0 until the sidx is read */
     UInt16 segmentCount;
-    Boolean live;
-    Boolean haveBase;       /* live: the first fragment's time is known */
+    /* Times count from here: 0, or a live stream's first fragment's. */
+    Boolean haveBase;
     UInt32 baseHigh;
     UInt32 baseLow;
 } Mp4Stream;
 
-/* totalSize is the stream's length in bytes, or MP4_STREAM_LIVE. Once the moov has arrived,
- * *trackP describes the track as Mp4ReaderOpen would. Returns mp4MergeOk
- * or mp4MergeNoMemory. */
+/* totalSize is the stream's length in bytes, or MP4_STREAM_LIVE. Once the
+ * moov has arrived, *trackP describes the track as Mp4ReaderOpen would.
+ * Returns mp4MergeOk or mp4MergeNoMemory. */
 UInt16 Mp4StreamOpen(Mp4Stream *s, UInt8 *ringP, UInt32 capacity,
                      UInt32 totalSize, Mp4ReadTrack *trackP);
 void Mp4StreamClose(Mp4Stream *s);

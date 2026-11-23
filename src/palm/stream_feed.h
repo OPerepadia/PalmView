@@ -41,8 +41,8 @@ void StreamFeedFree(StreamFeed *f);
 /* MP4_STREAM_LIVE for a live stream */
 UInt32 StreamFeedLength(const StreamFeed *f, UInt16 track);
 Boolean StreamFeedLive(const StreamFeed *f);
-/* A live stream's bytes per second: what its segments so far averaged,
- * or YouTube's figure before the first. */
+/* A stream's bytes per second: its length over its time, or what a live
+ * stream's segments so far averaged. YouTube's figure without either. */
 UInt32 StreamFeedRate(const StreamFeed *f, UInt16 track);
 /* Downloads from the start into the streams, opened with the lengths
  * above. With headersFirst, each stops after its segment index (where

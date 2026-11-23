@@ -266,7 +266,7 @@ build/host/playback_sim FILE [LOAD] [--seek AT TO]...
 build/host/playback_sim --stream testdata/media/ID.video.mp4 \
     testdata/media/ID.audio.mp4 30 [OUTAGE_AT SECONDS] [--seek AT TO]...
 build/host/playback_sim --live testdata/live/ID.live.video.mp4 \
-    testdata/live/ID.live.audio.mp4 30 --segment 5
+    testdata/live/ID.live.audio.mp4 30
 ```
 
 `build/host/feed_test --live` runs the feed against a fake live server.

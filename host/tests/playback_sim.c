@@ -10,10 +10,9 @@
  *   playback_sim --stream VIDEO.mp4 AUDIO.mp4 KB_PER_S [OUTAGE_AT SECONDS]
  *       [--seek AT TO]... [--start SECONDS]
  *   playback_sim --live VIDEO.mp4 AUDIO.mp4 KB_PER_S [OUTAGE_AT SECONDS]
- *       [--segment SECONDS]
  *
  * --live streams files of live segments in a row (pview live), which end
- * where the files do. --segment gives their length, 5 s by default.
+ * where the files do.
  *
  * The second form streams YouTube's two DASH files over a simulated
  * network of the given speed, which can drop out for a while. --start
@@ -198,6 +197,7 @@ void VFSFileClose(FileRef file) { fclose(file); }
 struct StreamFeed {
     FILE *files[2];
     UInt32 lengths[2];
+    UInt32 rates[2];        /* bytes per second */
     UInt32 offsets[2];
     Mp4Stream *streams[2];
     double bytesPerMs;
@@ -210,7 +210,6 @@ struct StreamFeed {
 static StreamFeed gFeed;
 static UInt32 gStartMs;
 static Boolean gLive;
-static UInt32 gSegmentSeconds = 5;
 
 UInt32 StreamFeedLength(const StreamFeed *f, UInt16 track)
 {
@@ -219,19 +218,7 @@ UInt32 StreamFeedLength(const StreamFeed *f, UInt16 track)
 
 Boolean StreamFeedLive(const StreamFeed *f) { (void)f; return gLive; }
 
-/* A live file's bytes per second, from how many segments it holds */
-UInt32 StreamFeedRate(const StreamFeed *f, UInt16 track)
-{
-    static UInt8 header[8];
-    UInt32 offset = 0, segments = 0;
-    while (fseek(f->files[track], (long)offset, SEEK_SET) == 0 &&
-           fread(header, 1, 8, f->files[track]) == 8) {
-        if (memcmp(header + 4, "ftyp", 4) == 0) segments++;
-        offset += (UInt32)header[0] << 24 | (UInt32)header[1] << 16 |
-            (UInt32)header[2] << 8 | header[3];
-    }
-    return segments == 0 ? 0 : f->lengths[track] / segments / gSegmentSeconds;
-}
+UInt32 StreamFeedRate(const StreamFeed *f, UInt16 track) { return f->rates[track]; }
 const Char *StreamFeedError(const StreamFeed *f) { (void)f; return 0; }
 UInt32 StreamFeedReceived(const StreamFeed *f) { return f->received; }
 void StreamFeedStop(StreamFeed *f) { (void)f; }
@@ -435,6 +422,28 @@ static void PrintClock(UInt32 ms)
         (unsigned)(ms / 100 % 10));
 }
 
+/* A file's bytes per second, from reading all of it */
+static UInt32 FileRate(FILE *fileP, UInt32 length)
+{
+    static UInt8 sample[65536];
+    UInt8 *dataP = (UInt8 *)malloc(length);
+    Mp4Stream stream;
+    Mp4ReadTrack track;
+    Mp4Sample out = { 0 };
+    rewind(fileP);
+    if (fread(dataP, 1, length, fileP) != length ||
+        Mp4StreamOpen(&stream, dataP, length, MP4_STREAM_LIVE, &track) !=
+            mp4MergeOk)
+        return 0;
+    stream.writeOffset = length;
+    Mp4StreamFinish(&stream, length);
+    while (Mp4StreamNext(&stream, &out, sample, sizeof(sample)) ==
+           mp4StreamSample) {}
+    Mp4StreamClose(&stream);
+    free(dataP);
+    return length / (out.dts / track.timescale + 1);
+}
+
 /* Opens the two DASH files for the simulated network. */
 static const Char *OpenFeed(char **argv, int argc)
 {
@@ -444,6 +453,7 @@ static const Char *OpenFeed(char **argv, int argc)
         if (gFeed.files[i] == 0) return "Could not open the stream files.";
         fseek(gFeed.files[i], 0, SEEK_END);
         gFeed.lengths[i] = (UInt32)ftell(gFeed.files[i]);
+        gFeed.rates[i] = FileRate(gFeed.files[i], gFeed.lengths[i]);
     }
     gFeed.bytesPerMs = atof(argv[4]) * 1024.0 / 1000.0;
     gFeed.outageStart = argc > 6 ? atof(argv[5]) * 1000.0 : -1;
@@ -459,15 +469,14 @@ int main(int argc, char **argv)
     double seekAt[MAX_SEEKS], seekTo[MAX_SEEKS];
     int seeks = 0, seeksDone = 0;
     RectangleType bounds = { { 0, 0 }, { 160, 90 } };
-    Boolean streaming = argc > 1 && (strcmp(argv[1], "--stream") == 0 ||
-        strcmp(argv[1], "--live") == 0);
+    Boolean live = argc > 1 && strcmp(argv[1], "--live") == 0;
+    Boolean streaming = live || (argc > 1 && strcmp(argv[1], "--stream") == 0);
     int pauseArg = streaming ? 7 : 3;
-    double pauseAtMs = argc > pauseArg ? atof(argv[pauseArg]) * 1000.0 : -1;
-    double pausedFor = 0, nextReport = 1000, waitedMs = 0, seekWaitMs = 0;
+    double pauseAtMs, pausedFor = 0, nextReport = 1000, waitedMs = 0, seekWaitMs = 0;
     const Char *errorP;
     DecVideoInfo video;
     DecAudioInfo audio;
-    UInt32 position, played = 0;
+    UInt32 position, played;
     UInt16 level = 0;
     int failed = 0;
     for (;;) {
@@ -479,21 +488,19 @@ int main(int argc, char **argv)
         } else if (argc > 2 && strcmp(argv[argc - 2], "--start") == 0) {
             gStartMs = (UInt32)(atof(argv[argc - 1]) * 1000.0);
             argc -= 2;
-        } else if (argc > 2 && strcmp(argv[argc - 2], "--segment") == 0) {
-            gSegmentSeconds = (UInt32)atoi(argv[argc - 1]);
-            argc -= 2;
         } else {
             break;
         }
     }
     if (argc < 2 || (streaming && argc < 5)) {
         fprintf(stderr, "usage: playback_sim FILE.mp4 [LOAD] [PAUSE_AT_SECONDS]\n"
-            "       playback_sim --stream VIDEO.mp4 AUDIO.mp4 KB_PER_S "
+            "       playback_sim --stream | --live VIDEO.mp4 AUDIO.mp4 KB_PER_S "
             "[OUTAGE_AT SECONDS [PAUSE_AT_SECONDS]] [--seek AT TO]... "
             "[--start SECONDS]\n");
         return 2;
     }
-    gLive = argc > 1 && strcmp(argv[1], "--live") == 0;
+    gLive = live;
+    pauseAtMs = argc > pauseArg ? atof(argv[pauseArg]) * 1000.0 : -1;
     if (!streaming && argc > 2) gLoad = atof(argv[2]);
     gScreenP = (UInt8 *)LowAlloc(640 * 480);
     errorP = streaming ? OpenFeed(argv, argc) : PlaybackOpen(p, argv[1]);
@@ -583,8 +590,8 @@ int main(int argc, char **argv)
                     (int)PlaybackBufferedMs(p, 1) / 1000);
             printf("\n");
         }
-        played = SoundGetRing()->played;
     }
+    played = SoundGetRing()->played;
     DecVideoGetInfo(&video);
     DecAudioGetInfo(&audio);
     printf("ended %d after %.1f s: %u frames decoded, %u shown, %u skipped, "

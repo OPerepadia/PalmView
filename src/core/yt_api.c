@@ -275,7 +275,6 @@ UInt16 YtBuildSegmentRequest(const YtClient *clientP, const Char *urlP,
     UInt16 length = 0;
     Boolean ok;
     if (!YtSplitUrl(urlP, host, sizeof(host), &pathP)) return 0;
-    if (capacity != 0) requestP[0] = '\0';
     ok = TextAppend(requestP, capacity, &length, "GET ") &&
         TextAppend(requestP, capacity, &length, pathP);
     if (ok && sequence != YT_NEWEST_SEGMENT)
@@ -371,12 +370,7 @@ static Boolean ItagRank(const UInt16 *itagsP, UInt16 itag, UInt16 *rankP)
 
 static void ResetCurrentFormat(YtPlayer *p)
 {
-    p->curItag = 0;
-    p->curLength = 0;
-    p->curIndexEnd = 0;
-    p->curBitrate = 0;
-    p->curSegmentSeconds = 0;
-    p->curHasUrl = false;
+    MemSet(&p->cur, sizeof(p->cur), 0);
     p->curUnusable = false;
     p->curDefault = false;
 }
@@ -415,24 +409,24 @@ static void FormatValue(YtPlayer *p, const JsonScanner *s, UInt16 type,
     if (JsonPathFrom(s, 3, "itag")) {
         UInt32 itag = 0;
         TextParseUInt32(textP, &itag);
-        p->curItag = (UInt16)itag;
+        p->cur.itag = (UInt16)itag;
     } else if (JsonPathFrom(s, 3, "url")) {
         if (s->valueTruncated) {
             p->curUnusable = true;
         } else {
-            MemMove(p->curUrl, textP, length + 1);
-            p->curHasUrl = true;
+            MemMove(p->cur.url, textP, length + 1);
+            p->cur.found = true;
         }
     } else if (JsonPathFrom(s, 3, "contentLength")) {
-        TextParseUInt32(textP, &p->curLength);
+        TextParseUInt32(textP, &p->cur.contentLength);
     } else if (JsonPathFrom(s, 3, "bitrate")) {
-        TextParseUInt32(textP, &p->curBitrate);
+        TextParseUInt32(textP, &p->cur.bitrate);
     } else if (JsonPathFrom(s, 3, "targetDurationSec")) {
         UInt32 seconds = 0;
         if (TextParseUInt32(textP, &seconds) && seconds < 3600)
-            p->curSegmentSeconds = (UInt16)seconds;
+            p->cur.segmentSeconds = (UInt16)seconds;
     } else if (JsonPathFrom(s, 3, "indexRange/end")) {
-        if (TextParseUInt32(textP, &p->curIndexEnd)) p->curIndexEnd++;
+        if (TextParseUInt32(textP, &p->cur.indexEnd)) p->cur.indexEnd++;
     } else if (JsonPathFrom(s, 3, "signatureCipher") ||
                JsonPathFrom(s, 3, "drmFamilies/#")) {
         p->curUnusable = true;
@@ -479,13 +473,7 @@ static Boolean BetterAudio(const YtPlayer *p, UInt16 rank)
 
 static void TakeFormat(YtFormat *formatP, const YtPlayer *p)
 {
-    formatP->found = true;
-    formatP->itag = p->curItag;
-    formatP->contentLength = p->curLength;
-    formatP->indexEnd = p->curIndexEnd;
-    formatP->bitrate = p->curBitrate;
-    formatP->segmentSeconds = p->curSegmentSeconds;
-    StrCopy(formatP->url, p->curUrl);
+    MemMove(formatP, &p->cur, sizeof(*formatP));
 }
 
 Boolean YtPlayerEnd(void *contextP, const JsonScanner *s)
@@ -497,12 +485,12 @@ Boolean YtPlayerEnd(void *contextP, const JsonScanner *s)
     /* Videos are fetched in ranges, so they need contentLength. Live
      * streams come in numbered segments instead. isLive comes after the
      * formats, so YtPlayerPlayable checks which kind each is. */
-    if (p->curHasUrl && !p->curUnusable &&
-        (p->curLength != 0 || p->curSegmentSeconds != 0)) {
+    if (p->cur.found && !p->curUnusable &&
+        (p->cur.contentLength != 0 || p->cur.segmentSeconds != 0)) {
         for (i = 0; i < YT_VIDEO_CHOICES; i++)
-            if (p->curItag == p->videoItags[i] && !p->video[i].found)
+            if (p->cur.itag == p->videoItags[i] && !p->video[i].found)
                 TakeFormat(&p->video[i], p);
-        if (ItagRank(p->audioItags, p->curItag, &rank) && BetterAudio(p, rank)) {
+        if (ItagRank(p->audioItags, p->cur.itag, &rank) && BetterAudio(p, rank)) {
             p->audioRank = rank;
             p->audioDefault = p->curDefault;
             TakeFormat(&p->audio, p);

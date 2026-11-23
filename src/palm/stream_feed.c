@@ -57,14 +57,10 @@ typedef struct FeedTrack {
 
     /* Live streams */
     UInt32 sequence;        /* the segment being fetched, or next */
-    UInt32 segmentLength;   /* its size, once a response says */
-    UInt32 segmentReceived; /* its bytes in the stream so far */
-    UInt32 largest;         /* the largest segment so far */
-    UInt32 liveBytes;       /* all segments so far, for the rate */
-    UInt32 liveSegments;
-    Boolean probing;        /* asking only for the newest number */
-    Boolean whole;          /* asking for a whole segment */
-    Boolean ended;          /* no more segments are coming */
+    UInt32 segmentStart;    /* where it starts in the stream */
+    UInt32 segmentEnd;      /* and ends, once its first bytes are in */
+    UInt32 segments;        /* how many are in */
+    UInt32 largest;         /* the largest of them */
 } FeedTrack;
 
 struct StreamFeed {
@@ -82,9 +78,10 @@ struct StreamFeed {
     NetJobResult failure;
     NetJobResult drop;
 
+    UInt32 seconds;         /* the video's length, or 0 */
     Boolean live;
-    UInt32 segmentTicks;
-    Boolean headKnown;
+    UInt32 segmentSeconds;
+    Boolean headKnown;      /* not yet: asking only for its number */
     UInt32 head;            /* the newest segment YouTube has */
     UInt32 headTicks;       /* when head last moved on */
 };
@@ -94,7 +91,7 @@ StreamFeed *StreamFeedNew(const NetJobConfig *configP, const YtClient *clientP,
                           Boolean live)
 {
     StreamFeed *f = (StreamFeed *)MemPtrNew(sizeof(StreamFeed));
-    UInt32 rate = 0;
+    UInt32 rate;
     if (f == 0) return 0;
     MemSet(f, sizeof(*f), 0);
     f->config = *configP;
@@ -103,22 +100,18 @@ StreamFeed *StreamFeedNew(const NetJobConfig *configP, const YtClient *clientP,
     f->config.keepAlive = true;
     f->clientP = clientP;
     f->live = live;
-    if (live) {
-        UInt16 segment = videoP->segmentSeconds > audioP->segmentSeconds
-            ? videoP->segmentSeconds : audioP->segmentSeconds;
-        f->segmentTicks = (UInt32)segment * SysTicksPerSecond();
-        rate = (videoP->bitrate / 8 + audioP->bitrate / 8) / 100 * PACE_PERCENT;
-    } else if (seconds != 0) {
-        rate = (videoP->contentLength / seconds + audioP->contentLength / seconds) /
-            100 * PACE_PERCENT;
-    }
-    f->pace = rate > PACE_MINIMUM ? rate : PACE_MINIMUM;
+    f->config.numberHeaderP = live ? LIVE_NUMBER_HEADER : 0;
+    f->seconds = seconds;
+    f->segmentSeconds = videoP->segmentSeconds;
     f->tracks[STREAM_FEED_VIDEO].formatP = videoP;
     f->tracks[STREAM_FEED_AUDIO].formatP = audioP;
     f->tracks[STREAM_FEED_VIDEO].feedP = f;
     f->tracks[STREAM_FEED_AUDIO].feedP = f;
     f->tracks[STREAM_FEED_VIDEO].tagP = "v";
     f->tracks[STREAM_FEED_AUDIO].tagP = "a";
+    rate = (StreamFeedRate(f, STREAM_FEED_VIDEO) +
+        StreamFeedRate(f, STREAM_FEED_AUDIO)) / 100 * PACE_PERCENT;
+    f->pace = rate > PACE_MINIMUM ? rate : PACE_MINIMUM;
     return f;
 }
 
@@ -142,9 +135,9 @@ Boolean StreamFeedLive(const StreamFeed *f)
 UInt32 StreamFeedRate(const StreamFeed *f, UInt16 track)
 {
     const FeedTrack *t = &f->tracks[track];
-    UInt32 seconds = f->segmentTicks / SysTicksPerSecond();
-    if (t->liveSegments == 0 || seconds == 0) return t->formatP->bitrate / 8;
-    return t->liveBytes / t->liveSegments / seconds;
+    if (t->segments != 0) return t->segmentStart / t->segments / f->segmentSeconds;
+    if (!f->live && f->seconds != 0) return t->formatP->contentLength / f->seconds;
+    return t->formatP->bitrate / 8;
 }
 
 void StreamFeedStart(StreamFeed *f, Mp4Stream *videoP, Mp4Stream *audioP,
@@ -163,10 +156,9 @@ void StreamFeedStart(StreamFeed *f, Mp4Stream *videoP, Mp4Stream *audioP,
         t->waiting = false;
         t->failures = 0;
         t->redirects = 0;
-        t->segmentLength = 0;
-        t->segmentReceived = 0;
-        t->probing = false;
-        t->ended = false;
+        t->segmentStart = 0;
+        t->segmentEnd = 0;
+        t->segments = 0;
     }
     f->headKnown = false;
 }
@@ -250,13 +242,15 @@ const NetJobResult *StreamFeedDrop(const StreamFeed *f)
 static Int16 Receive(void *contextP, const UInt8 *dataP, UInt16 length)
 {
     FeedTrack *t = (FeedTrack *)contextP;
-    /* Only the probe's headers matter. */
-    if (t->probing) return 0;
+    StreamFeed *f = t->feedP;
+    /* Only the headers of the request for the newest number matter. */
+    if (f->live && !f->headKnown) return 0;
     if (length > Mp4StreamSpace(t->streamP)) return 1;
+    if (t->offset == t->segmentStart)
+        t->segmentEnd = t->offset + t->result.contentLength;
     Mp4StreamWrite(t->streamP, dataP, length);
     t->offset += length;
-    t->segmentReceived += length;
-    t->feedP->received += length;
+    f->received += length;
     return 0;
 }
 
@@ -279,24 +273,20 @@ static UInt16 BuildRange(StreamFeed *f, FeedTrack *t)
  * connection cut short. */
 static UInt16 BuildLive(StreamFeed *f, FeedTrack *t)
 {
-    UInt32 sequence = t->sequence, start = 0, end = YT_WHOLE_SEGMENT;
-    t->probing = !f->headKnown;
-    if (t->probing) {
-        sequence = YT_NEWEST_SEGMENT;
-        end = 0;
-    } else if (t->segmentReceived != 0) {
-        if (t->segmentLength <= t->segmentReceived) return 0;
-        start = t->segmentReceived;
-        end = t->segmentLength - 1;
-    }
-    t->whole = !t->probing && end == YT_WHOLE_SEGMENT;
-    if (t->probing)
+    UInt32 start = t->offset - t->segmentStart, end = YT_WHOLE_SEGMENT;
+    if (!f->headKnown) {
         UdpLogLine(f->config.logP, t->tagP, "newest segment?", 0, 0, 0);
-    else
-        UdpLogLine(f->config.logP, t->tagP, "get segment % from %", sequence,
-            start, 0);
-    return YtBuildSegmentRequest(f->clientP, t->formatP->url, sequence, start,
-        end, true, t->request, sizeof(t->request));
+        return YtBuildSegmentRequest(f->clientP, t->formatP->url,
+            YT_NEWEST_SEGMENT, 0, 0, true, t->request, sizeof(t->request));
+    }
+    if (start != 0) {
+        if (t->segmentEnd <= t->offset) return 0;
+        end = t->segmentEnd - t->segmentStart - 1;
+    }
+    UdpLogLine(f->config.logP, t->tagP, "get segment % from %", t->sequence,
+        start, 0);
+    return YtBuildSegmentRequest(f->clientP, t->formatP->url, t->sequence,
+        start, end, true, t->request, sizeof(t->request));
 }
 
 static void Request(StreamFeed *f, FeedTrack *t)
@@ -319,14 +309,12 @@ static void Request(StreamFeed *f, FeedTrack *t)
     }
     NetJobKeepLocation(t->jobP, t->location, sizeof(t->location));
     NetJobSetTag(t->jobP, t->tagP);
-    if (f->live) NetJobKeepNumber(t->jobP, LIVE_NUMBER_HEADER);
 }
 
 /* Both streams start LIVE_BEHIND_SECONDS before the newest segment. */
 static void StartLive(StreamFeed *f, UInt32 newest)
 {
-    UInt32 seconds = f->segmentTicks / SysTicksPerSecond();
-    UInt32 back = seconds == 0 ? 1 : (LIVE_BEHIND_SECONDS + seconds - 1) / seconds;
+    UInt32 back = (LIVE_BEHIND_SECONDS + f->segmentSeconds - 1) / f->segmentSeconds;
     UInt16 i;
     for (i = 0; i < 2; i++)
         f->tracks[i].sequence = newest > back ? newest - back : 0;
@@ -337,23 +325,11 @@ static void StartLive(StreamFeed *f, UInt32 newest)
 
 static void NextSegment(FeedTrack *t)
 {
-    t->liveBytes += t->segmentReceived;
-    t->liveSegments++;
-    if (t->segmentReceived > t->largest) t->largest = t->segmentReceived;
+    UInt32 size = t->offset - t->segmentStart;
+    if (size > t->largest) t->largest = size;
+    t->segmentStart = t->offset;
+    t->segments++;
     t->sequence++;
-    t->segmentReceived = 0;
-    t->segmentLength = 0;
-    t->failures = 0;
-    t->redirects = 0;
-}
-
-/* The stream ends where its unfinished segment starts. */
-static void EndLive(StreamFeed *f, FeedTrack *t)
-{
-    t->ended = true;
-    Mp4StreamFinish(t->streamP, t->offset - t->segmentReceived);
-    UdpLogLine(f->config.logP, t->tagP, "live stream ended at segment %",
-        t->sequence, 0, 0);
 }
 
 /* Live: notes the newest segment, and moves on once a segment is in.
@@ -362,38 +338,30 @@ static Boolean FinishedLive(StreamFeed *f, FeedTrack *t)
 {
     const NetJobResult *r = &t->result;
     UInt32 now = TimGetTicks();
-    if (r->hasNumber && (!f->headKnown || r->number > f->head)) {
-        if (!f->headKnown) StartLive(f, r->number);
+    Boolean probe = !f->headKnown, over;
+    if (r->hasNumber && (probe || r->number > f->head)) {
+        if (probe) StartLive(f, r->number);
         f->head = r->number;
         f->headTicks = now;
     }
-    if (t->whole && r->httpStatus == 200 && r->contentLength != 0)
-        t->segmentLength = r->contentLength;
-    if (t->probing) {
-        if (r->status != netJobOk) return true;
-        t->probing = false;
-        t->failures = 0;
-        if (!f->headKnown) f->errorP = "YouTube did not say where the live stream is.";
-        return false;
+    if (probe) {
+        if (r->status == netJobOk && !f->headKnown)
+            f->errorP = "YouTube did not say where the live stream is.";
+        return true;
     }
-    if (r->status == netJobOk && r->received != 0 &&
-        (t->segmentLength == 0 || t->segmentReceived >= t->segmentLength)) {
+    if (r->status == netJobOk && r->received != 0 && t->offset >= t->segmentEnd)
         NextSegment(t);
-        return false;
-    }
-    /* Asked too early: YouTube waits a few seconds, then has nothing. */
-    if (r->httpStatus == 204 || (r->httpStatus == 404 && t->sequence > f->head)) {
-        if (now - f->headTicks >= LIVE_END_SECONDS * (UInt32)SysTicksPerSecond()) {
-            EndLive(f, t);
-            return false;
-        }
-        t->waiting = true;
-        t->retryTicks = now + f->segmentTicks / 2;
-        UdpLogLine(f->config.logP, t->tagP, "segment % not out yet",
-            t->sequence, 0, 0);
-        return false;
-    }
-    return true;
+    if (r->httpStatus != 204 && (r->httpStatus != 404 || t->sequence <= f->head))
+        return true;
+    /* Asked too early: YouTube waits a few seconds, then has nothing. The
+     * stream ends where this segment starts, if that goes on. */
+    over = now - f->headTicks >= LIVE_END_SECONDS * (UInt32)SysTicksPerSecond();
+    UdpLogLine(f->config.logP, t->tagP, over ? "live stream ended at segment %"
+        : "segment % not out yet", t->sequence, 0, 0);
+    if (over) Mp4StreamFinish(t->streamP, t->segmentStart);
+    t->waiting = true;
+    t->retryTicks = now + f->segmentSeconds * SysTicksPerSecond() / 2;
+    return false;
 }
 
 static void Finished(StreamFeed *f, FeedTrack *t)
@@ -442,40 +410,41 @@ static void Finished(StreamFeed *f, FeedTrack *t)
         (UInt32)t->failures * RETRY_SECONDS, 0);
 }
 
-/* Live: a segment is asked for once YouTube should have it, and only
- * with room for all of it, guessed from the largest so far. Until the
- * newest number is known, only video asks, for that. */
-static UInt32 LiveWant(const StreamFeed *f, const FeedTrack *t)
+/* The room a video's next request needs, or 0 if it is all in */
+static UInt32 RangeNeed(const FeedTrack *t)
 {
-    UInt32 space, need, capacity = t->streamP->capacity;
+    UInt32 end = t->limit != 0 ? t->limit : t->formatP->contentLength;
+    UInt32 need = t->streamP->capacity / STREAM_FEED_REFILL_DIVISOR;
+    if (t->offset >= end) return 0;
+    return need < end - t->offset ? need : end - t->offset;
+}
+
+/* Live: room for a whole segment, guessed from the largest so far, once
+ * YouTube should have it. Until the newest number is known, only video
+ * asks, for that. */
+static UInt32 LiveNeed(const StreamFeed *f, const FeedTrack *t)
+{
+    UInt32 need, most = t->streamP->capacity / 4 * 3;
     if (!f->headKnown) return t == &f->tracks[STREAM_FEED_VIDEO] ? 1 : 0;
-    if (t->ended || t->sequence > f->head + 1) return 0;
-    if (t->sequence == f->head + 1 &&
-        TimGetTicks() - f->headTicks < f->segmentTicks)
+    if (Mp4StreamReceived(t->streamP)) return 0;
+    if (t->sequence > f->head && TimGetTicks() - f->headTicks <
+            f->segmentSeconds * SysTicksPerSecond())
         return 0;
-    space = Mp4StreamSpace(t->streamP);
     need = t->largest != 0 ? t->largest + t->largest / 4
-        : t->formatP->bitrate / 8 * (f->segmentTicks / SysTicksPerSecond());
-    if (need > capacity / 4 * 3) need = capacity / 4 * 3;
-    if (space < need) return 0;
-    return (space << 8) / capacity + 1;
+        : t->formatP->bitrate / 8 * f->segmentSeconds;
+    return need < most ? need : most;
 }
 
 /* How much a track wants a request now: 0 if it cannot or need not ask,
  * otherwise more the emptier its ring. */
 static UInt32 Want(const StreamFeed *f, const FeedTrack *t)
 {
-    UInt32 end = t->limit != 0 ? t->limit : t->formatP->contentLength;
-    UInt32 left, space, need;
+    UInt32 space, need;
     if (t->streamP == 0) return 0;
     if (t->waiting && (Int32)(TimGetTicks() - t->retryTicks) < 0) return 0;
-    if (f->live) return LiveWant(f, t);
-    if (t->offset >= end) return 0;
-    left = end - t->offset;
+    need = f->live ? LiveNeed(f, t) : RangeNeed(t);
     space = Mp4StreamSpace(t->streamP);
-    need = t->streamP->capacity / STREAM_FEED_REFILL_DIVISOR;
-    if (need > left) need = left;
-    if (space < need) return 0;
+    if (need == 0 || space < need) return 0;
     return (space << 8) / t->streamP->capacity + 1;
 }
 
@@ -483,11 +452,9 @@ static UInt32 Want(const StreamFeed *f, const FeedTrack *t)
  * response waits until the player has made room for the next read. */
 static Boolean LiveRoom(const FeedTrack *t)
 {
-    UInt32 need = NET_JOB_IO_CAPACITY, length;
-    if (t->probing) return true;
-    length = t->whole ? t->result.contentLength : t->segmentLength;
-    if (length > t->segmentReceived && length - t->segmentReceived < need)
-        need = length - t->segmentReceived;
+    UInt32 need = NET_JOB_IO_CAPACITY;
+    if (t->segmentEnd > t->offset && t->segmentEnd - t->offset < need)
+        need = t->segmentEnd - t->offset;
     return Mp4StreamSpace(t->streamP) >= need;
 }
 
@@ -500,13 +467,11 @@ static void WaitForRoom(StreamFeed *f, FeedTrack *t)
     const FeedTrack *otherP = &f->tracks[t == &f->tracks[STREAM_FEED_VIDEO]
         ? STREAM_FEED_AUDIO : STREAM_FEED_VIDEO];
     const Mp4Stream *s = otherP->streamP;
-    if (Mp4StreamBuffered(s) >= s->capacity / 4 || Want(f, otherP) == 0)
+    if (Mp4StreamBuffered(s) >= s->capacity / 4 || Want(f, otherP) == 0 ||
+        t->segmentEnd <= t->offset)
         return;
-    if (t->whole && t->result.contentLength != 0)
-        t->segmentLength = t->result.contentLength;
-    if (t->segmentLength <= t->segmentReceived) return;
     UdpLogLine(f->config.logP, t->tagP, "cut segment % at %", t->sequence,
-        t->segmentReceived, 0);
+        t->offset - t->segmentStart, 0);
     Close(t);
     f->activeP = 0;
 }

@@ -335,12 +335,13 @@ void FinishPlayer(AppState *s)
     } else {
         SaveVisitor(s, playerP->visitor);
         s->progress[0] = '\0';
-        if (YtPlayerDownloadable(playerP)) {
-            MakeOutPath(s);
-            FindSavedCopy(s);
-            DescribeSavedCopy(s);
-        } else if (YtPlayerPlayable(playerP)) {
-            /* Live: nothing saved to look for */
+        if (YtPlayerPlayable(playerP)) {
+            /* A live stream has no saved copy. */
+            if (!playerP->live) {
+                MakeOutPath(s);
+                FindSavedCopy(s);
+                DescribeSavedCopy(s);
+            }
         } else if (StrCompare(playerP->status, "OK") != 0) {
             StrCopy(s->progress, "YouTube: ");
             Append(s->progress, sizeof(s->progress), playerP->reason[0] != '\0'

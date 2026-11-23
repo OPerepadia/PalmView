@@ -10,14 +10,13 @@
  * then both streams seek to random segments, mid-request or not.
  *
  * With --live, the files are live segments in a row (pview live). The
- * "server" puts out one more every SECONDS, holds a request for the next
- * one until it is out, answers 204 when it does not come, and fails any
+ * "server" puts out one more each segment time, holds a request for the
+ * next one until it is out, answers 204 when it does not come, and fails any
  * request out of order or past a segment's end. Some responses drop
  * partway. Once the segments run out the stream must end, with every
  * sample read in order.
  *
- *   feed_test VIDEO.mp4 AUDIO.mp4 VIDEO_RING_KB AUDIO_RING_KB SEED
- *   feed_test --live VIDEO.mp4 AUDIO.mp4 SECONDS VIDEO_RING_KB AUDIO_RING_KB SEED
+ *   feed_test [--live] VIDEO.mp4 AUDIO.mp4 VIDEO_RING_KB AUDIO_RING_KB SEED
  */
 
 #include <PalmOS.h>
@@ -50,6 +49,7 @@ typedef struct Source {
     UInt16 count;
     UInt32 sequence;        /* the segment the feed should ask for */
     UInt32 inSegment;       /* its bytes delivered so far */
+    UInt32 samples;         /* in the whole file */
 } Source;
 
 enum { jobConnecting, jobSending, jobDelivering, jobIdle, jobDead };
@@ -58,10 +58,8 @@ struct NetJob {
     Source *sourceP;
     UInt32 next, end;
     UInt32 readyTicks;      /* live: when the reply starts */
-    UInt32 sequence;
     UInt16 http;
-    Boolean probe;
-    Boolean hold;           /* waiting for the next segment */
+    Boolean probe;          /* asks only for the newest number */
     HttpBodyProc bodyProcP;
     void *contextP;
     NetJobResult *resultP;
@@ -71,6 +69,11 @@ struct NetJob {
 };
 
 static Source gSources[2];
+static YtFormat gFormats[2];
+static Mp4Stream gStreams[2];
+static Mp4ReadTrack gTracks[2];
+static UInt32 gTaken[2], gLastDts[2], gRingKb[2];
+static Boolean gEnded[2];
 static int gActive, gRequests, gReused, gDropped, gClosed, gSeeks;
 static Boolean gPlaying;
 static UInt32 gPace = PACE_MINIMUM;
@@ -129,78 +132,70 @@ static UInt32 Newest(void)
     return FIRST_SEGMENT + (out < count ? out : count) - 1;
 }
 
-static void BeginLive(NetJob *jobP, const Char *requestP)
+static void BeginLive(NetJob *jobP, const char *sequenceP, const char *rangeP)
 {
     Source *s = jobP->sourceP;
-    const char *sequenceP = strstr(requestP, "sq="), *rangeP = strstr(requestP, "range=");
-    UInt32 start = 0, end, size, newest = Newest();
+    UInt32 start, end, sequence, newest = Newest();
+    const UInt32 *boundsP;
     char *endP;
     jobP->http = 200;
     jobP->readyTicks = gTicks;
     jobP->probe = sequenceP == 0;
-    jobP->hold = false;
     if (jobP->probe) {
         if (rangeP == 0 || strncmp(rangeP, "range=0-0 ", 10) != 0)
             Fail("asked for more than the newest number");
         gProbes++;
-        jobP->sequence = newest;
-        jobP->next = jobP->end = s->starts[newest - FIRST_SEGMENT];
+        jobP->next = jobP->end = 0;
         return;
     }
-    jobP->sequence = (UInt32)strtoul(sequenceP + 3, 0, 10);
-    if (jobP->sequence < FIRST_SEGMENT) Fail("asked for a segment before the first");
-    if (jobP->sequence > newest + 1) Fail("asked past the next segment");
-    if (jobP->sequence != s->sequence) Fail("segments out of order");
-    if (jobP->sequence > newest) {
+    sequence = (UInt32)strtoul(sequenceP + 3, 0, 10);
+    if (sequence > newest + 1) Fail("asked past the next segment");
+    if (sequence != s->sequence) Fail("segments out of order");
+    if (sequence > newest) {
         /* Held until it is out, or answered with nothing. */
-        UInt32 due = (jobP->sequence - FIRST_SEGMENT + 1 - gInitial) * gSegmentTicks;
-        jobP->hold = true;
+        UInt32 due = (sequence - FIRST_SEGMENT + 1 - gInitial) * gSegmentTicks;
         gHeld++;
-        if (jobP->sequence - FIRST_SEGMENT < s->count && due <= gTicks + HOLD_TICKS) {
-            jobP->readyTicks = due;
-        } else {
+        if (sequence - FIRST_SEGMENT >= s->count || due > gTicks + HOLD_TICKS) {
             jobP->readyTicks = gTicks + HOLD_TICKS;
             jobP->http = 204;
             return;
         }
+        jobP->readyTicks = due;
     }
-    size = s->starts[jobP->sequence - FIRST_SEGMENT + 1] -
-        s->starts[jobP->sequence - FIRST_SEGMENT];
-    end = size - 1;
+    boundsP = &s->starts[sequence - FIRST_SEGMENT];
+    start = 0;
+    end = boundsP[1] - boundsP[0] - 1;
     if (rangeP != 0) {
         start = (UInt32)strtoul(rangeP + 6, &endP, 10);
-        end = (UInt32)strtoul(endP + 1, 0, 10);
-        if (start != s->inSegment) Fail("rest of a segment does not continue");
-        if (end >= size) Fail("range past the segment's end");
-    } else if (s->inSegment != 0) {
-        Fail("whole segment asked again");
+        if ((UInt32)strtoul(endP + 1, 0, 10) != end)
+            Fail("range does not end with the segment");
     }
-    jobP->next = s->starts[jobP->sequence - FIRST_SEGMENT] + start;
-    jobP->end = s->starts[jobP->sequence - FIRST_SEGMENT] + end;
+    if (start != s->inSegment) Fail("request does not continue the segment");
+    jobP->next = boundsP[0] + start;
+    jobP->end = boundsP[0] + end;
 }
 
-/* Reads the range a request asks for, and checks it continues the file. */
-static void Begin(NetJob *jobP, const Char *requestP)
+static void BeginRange(NetJob *jobP, const char *rangeP)
 {
-    const char *rangeP = strstr(requestP, "range=");
     char *endP;
-    if (gLive) {
-        if (strstr(requestP, "Connection: keep-alive") == 0)
-            Fail("request without keep-alive");
-        if (++gActive > 1) Fail("two requests in flight");
-        gRequests++;
-        BeginLive(jobP, requestP);
-        return;
-    }
-    if (rangeP == 0 || strstr(requestP, "Connection: keep-alive") == 0)
-        Fail("request without a range or keep-alive");
+    if (rangeP == 0) Fail("request without a range");
     jobP->next = (UInt32)strtoul(rangeP + 6, &endP, 10);
     jobP->end = (UInt32)strtoul(endP + 1, 0, 10);
     if (jobP->next != jobP->sourceP->next) Fail("range does not continue");
     if (jobP->end < jobP->next || jobP->end >= jobP->sourceP->size)
         Fail("range out of bounds");
+}
+
+/* Reads what a request asks for, and checks it continues the file. */
+static void Begin(NetJob *jobP, const Char *requestP)
+{
+    const char *rangeP = strstr(requestP, "range=");
+    if (strstr(requestP, "Connection: keep-alive") == 0)
+        Fail("request without keep-alive");
     if (++gActive > 1) Fail("two requests in flight");
     gRequests++;
+    if (gLive) BeginLive(jobP, strstr(requestP, "sq="), rangeP);
+    else BeginRange(jobP, rangeP);
 }
 
 Boolean NetJobStart(NetJob **jobPP, const NetJobConfig *configP,
@@ -249,6 +244,7 @@ UInt16 NetJobStep(NetJob **jobPP)
 {
     NetJob *jobP = *jobPP;
     NetJobResult *r = jobP->resultP;
+    Source *s = jobP->sourceP;
     UInt32 n;
     if (jobP->cancelled) {
         if (jobP->state != jobIdle) gActive--;
@@ -297,34 +293,28 @@ UInt16 NetJobStep(NetJob **jobPP)
     }
     n = (UInt32)(rand() % NET_JOB_IO_CAPACITY + 1);
     if (n > jobP->end - jobP->next + 1) n = jobP->end - jobP->next + 1;
-    {
-        Source *sourceP = jobP->sourceP;
-        if (sourceP->pacedSecond != gTicks / 100) {
-            sourceP->pacedSecond = gTicks / 100;
-            sourceP->pacedBytes = 0;
-            sourceP->playingBytes = 0;
-        }
-        if (Mp4StreamBuffered(sourceP->streamP) >= sourceP->streamP->capacity / 2)
-            sourceP->pacedBytes += n;
-        else if (gPlaying)
-            sourceP->playingBytes += n;
-        if (sourceP->pacedBytes > gPace + 2 * NET_JOB_IO_CAPACITY ||
-            sourceP->playingBytes > 2 * gPace + 2 * NET_JOB_IO_CAPACITY)
-            Fail("paced reads too fast");
+    if (s->pacedSecond != gTicks / 100) {
+        s->pacedSecond = gTicks / 100;
+        s->pacedBytes = 0;
+        s->playingBytes = 0;
     }
-    if (jobP->bodyProcP(jobP->contextP, jobP->sourceP->dataP + jobP->next,
-            (UInt16)n) != 0)
+    if (Mp4StreamBuffered(s->streamP) >= s->streamP->capacity / 2)
+        s->pacedBytes += n;
+    else if (gPlaying)
+        s->playingBytes += n;
+    if (s->pacedBytes > gPace + 2 * NET_JOB_IO_CAPACITY ||
+        s->playingBytes > 2 * gPace + 2 * NET_JOB_IO_CAPACITY)
+        Fail("paced reads too fast");
+    if (jobP->bodyProcP(jobP->contextP, s->dataP + jobP->next, (UInt16)n) != 0)
         Fail("more data than the ring had room for");
     jobP->next += n;
     r->received += n;
     if (!jobP->probe) {
-        Source *sourceP = jobP->sourceP;
-        sourceP->next += n;
-        sourceP->inSegment += n;
-        if (gLive &&
-            sourceP->next == sourceP->starts[sourceP->sequence - FIRST_SEGMENT + 1]) {
-            sourceP->sequence++;
-            sourceP->inSegment = 0;
+        s->next += n;
+        s->inSegment += n;
+        if (gLive && s->next == s->starts[s->sequence - FIRST_SEGMENT + 1]) {
+            s->sequence++;
+            s->inSegment = 0;
         }
     }
     if (jobP->next <= jobP->end) return netJobRunning;
@@ -348,21 +338,20 @@ void NetJobKeepLocation(NetJob *jobP, Char *bufferP, UInt16 capacity)
     if (capacity != 0) bufferP[0] = '\0';
 }
 void NetJobSetTag(NetJob *jobP, const Char *tagP) { (void)jobP; (void)tagP; }
-void NetJobKeepNumber(NetJob *jobP, const Char *nameP) { (void)jobP; (void)nameP; }
 void UdpLogLine(UdpLog *logP, const Char *tagP, const Char *formatP,
                 UInt32 a, UInt32 b, UInt32 c)
 {
     (void)logP; (void)tagP; (void)formatP; (void)a; (void)b; (void)c;
 }
 
-/* Samples of a whole live file, read in one go */
-static UInt32 CountSamples(const Source *s)
+/* Counts a whole live file's samples. Returns its segments' length. */
+static UInt32 MeasureLive(Source *s)
 {
     static UInt8 sample[SAMPLE_CAPACITY];
     Mp4Stream stream;
     Mp4ReadTrack track;
-    Mp4Sample out;
-    UInt32 count = 0;
+    Mp4Sample out = { 0 };
+    UInt32 seconds;
     UInt16 result;
     if (Mp4StreamOpen(&stream, s->dataP, s->size, MP4_STREAM_LIVE, &track) !=
             mp4MergeOk)
@@ -371,195 +360,161 @@ static UInt32 CountSamples(const Source *s)
     Mp4StreamFinish(&stream, s->size);
     while ((result = Mp4StreamNext(&stream, &out, sample, sizeof(sample))) ==
            mp4StreamSample)
-        count++;
+        s->samples++;
     if (result != mp4StreamEnd) Fail("whole live file unreadable");
+    /* The last sample ends where the file does, about. */
+    seconds = (out.dts / s->count + track.timescale / 2) / track.timescale;
     Mp4StreamClose(&stream);
-    return count;
+    return seconds;
 }
 
-static int LiveMain(char **argv)
+static void OpenSource(int i, const char *pathP, const char *ringKbP)
 {
-    static UInt8 sample[SAMPLE_CAPACITY];
-    static YtFormat formats[2];
-    static Mp4Stream streams[2];
-    static Mp4ReadTrack tracks[2];
-    YtClient client;
-    NetJobConfig config;
-    StreamFeed *f;
-    UInt32 loops, taken[2] = { 0, 0 }, want[2], lastDts[2] = { 0, 0 };
-    UInt32 seconds = (UInt32)atoi(argv[2]), back;
-    Boolean ended[2] = { false, false };
-    int i;
-    gLive = true;
-    gSegmentTicks = seconds * 100;
-    srand((unsigned)atoi(argv[5]));
-    gSources[0].hostP = "v.example";
-    gSources[1].hostP = "a.example";
-    for (i = 0; i < 2; i++) {
-        UInt32 ringBytes = (UInt32)atoi(argv[3 + i]) * 1024;
-        gSources[i].dataP = Load(argv[i], &gSources[i].size);
-        if (gSources[i].dataP == 0) Fail("cannot read the inputs");
-        FindSegments(&gSources[i]);
-        gSources[i].sequence = FIRST_SEGMENT;
-        want[i] = CountSamples(&gSources[i]);
-        snprintf(formats[i].url, sizeof(formats[i].url),
-            "https://%s/videoplayback?id=1", gSources[i].hostP);
-        formats[i].bitrate = i == 0 ? 192223 : 144000;
-        formats[i].segmentSeconds = (UInt16)seconds;
-        gSources[i].streamP = &streams[i];
-        if (Mp4StreamOpen(&streams[i], (UInt8 *)malloc(ringBytes), ringBytes,
-                MP4_STREAM_LIVE, &tracks[i]) != mp4MergeOk)
-            Fail("cannot open a stream");
+    Source *s = &gSources[i];
+    gRingKb[i] = (UInt32)atoi(ringKbP);
+    s->hostP = i == 0 ? "v.example" : "a.example";
+    s->streamP = &gStreams[i];
+    s->sequence = FIRST_SEGMENT;
+    s->dataP = Load(pathP, &s->size);
+    if (s->dataP == 0) Fail("cannot read the inputs");
+    snprintf(gFormats[i].url, sizeof(gFormats[i].url),
+        "https://%s/videoplayback?id=1", s->hostP);
+    if (gLive) {
+        FindSegments(s);
+        gFormats[i].segmentSeconds = (UInt16)MeasureLive(s);
+        gFormats[i].bitrate = i == 0 ? 192223 : 144000;
+    } else {
+        gFormats[i].contentLength = s->size;
     }
-    /* The feed starts LIVE_BEHIND_SECONDS back: at the first segment. */
-    back = (LIVE_BEHIND_SECONDS + seconds - 1) / seconds;
-    gInitial = back + 1;
+    if (Mp4StreamOpen(&gStreams[i], (UInt8 *)malloc(gRingKb[i] * 1024),
+            gRingKb[i] * 1024, gLive ? MP4_STREAM_LIVE : s->size, &gTracks[i]) !=
+            mp4MergeOk)
+        Fail("cannot open a stream");
+}
+
+/* The feed starts LIVE_BEHIND_SECONDS back: at the first segment. */
+static void StartServer(void)
+{
+    UInt32 seconds = gFormats[0].segmentSeconds;
+    gSegmentTicks = seconds * 100;
+    gInitial = (LIVE_BEHIND_SECONDS + seconds - 1) / seconds + 1;
     if (gInitial > gSources[0].count || gInitial > gSources[1].count)
         Fail("too few segments");
-    YtClientDefaults(&client);
-    MemSet(&config, sizeof(config), 0);
-    f = StreamFeedNew(&config, &client, &formats[0], &formats[1], 0, true);
-    gPace = f->pace;
-    if (StreamFeedLength(f, 0) != MP4_STREAM_LIVE || !StreamFeedLive(f))
-        Fail("not live");
-    StreamFeedStart(f, &streams[0], &streams[1], false);
-    for (loops = 0; !(ended[0] && ended[1]); loops++) {
-        Boolean waiting = false;
-        if (loops == MAX_LOOPS) Fail("streams never finished");
-        gTicks += 2;
-        StreamFeedStep(f, gPlaying);
-        if (StreamFeedError(f) != 0) Fail(StreamFeedError(f));
-        for (i = 0; i < 2; i++)
-            if (!ended[i] && (!Mp4StreamReady(&streams[i]) ||
-                    (Mp4StreamBuffered(&streams[i]) < 8192 &&
-                     !Mp4StreamReceived(&streams[i]))))
-                waiting = true;
-        gPlaying = !waiting;
-        if (waiting) continue;
-        for (i = 0; i < 2; i++) {
-            Mp4Sample s;
-            UInt16 result;
-            if (ended[i] || loops % (i == 0 ? 3 : 2) != 0) continue;
-            result = Mp4StreamNext(&streams[i], &s, sample, sizeof(sample));
-            if (result == mp4StreamSample) {
-                if (taken[i] == 0 ? s.dts != 0 : s.dts <= lastDts[i])
-                    Fail("times do not start at 0 and grow");
-                lastDts[i] = s.dts;
-                taken[i]++;
-            } else if (result == mp4StreamEnd) {
-                ended[i] = true;
-            } else if (result == mp4StreamError) {
-                Fail("stream error");
-            }
-        }
-    }
-    for (i = 0; i < 2; i++) {
-        if (gSources[i].next != gSources[i].size) Fail("a stream was cut short");
-        if (taken[i] != want[i]) Fail("samples missing");
-    }
-    if (StreamFeedRate(f, 0) == 0 || StreamFeedRate(f, 1) == 0) Fail("no rate");
-    printf("live feed ok: %u + %u samples, %d requests (%d reused, %d dropped, "
-        "%d cut, %d cancelled), %d probes, %d held, %d early, rates %u + %u B/s, "
-        "%u s\n", (unsigned)taken[0], (unsigned)taken[1], gRequests, gReused,
-        gDropped, gCut, gCancelled, gProbes, gHeld, gEarly, (unsigned)StreamFeedRate(f, 0),
-        (unsigned)StreamFeedRate(f, 1), (unsigned)(gTicks / 100));
+}
+
+/* 240p and its sound over 213 s: 36 KB/s, paced a quarter above. */
+static void TestPace(const NetJobConfig *configP, const YtClient *clientP)
+{
+    YtFormat video = gFormats[0], audio = gFormats[1];
+    StreamFeed *f;
+    video.contentLength = 4310122UL;
+    audio.contentLength = 3449447UL;
+    f = StreamFeedNew(configP, clientP, &video, &audio, 213, false);
+    if (f == 0 || f->pace != 45500UL) Fail("pace from the bitrates");
     StreamFeedFree(f);
-    return 0;
+}
+
+/* The player waits while either stream has nothing ready. */
+static Boolean Waiting(void)
+{
+    Boolean waiting = false;
+    int i;
+    for (i = 0; i < 2; i++)
+        if (!gEnded[i] && (!Mp4StreamReady(&gStreams[i]) ||
+                (Mp4StreamBuffered(&gStreams[i]) < 8192 &&
+                 !Mp4StreamReceived(&gStreams[i]))))
+            waiting = true;
+    return waiting;
+}
+
+static Boolean SeekNowAndThen(StreamFeed *f)
+{
+    UInt32 offsets[2];
+    int i;
+    if (gLive || gSeeks >= SEEKS || rand() % 2000 != 0 ||
+        gStreams[0].segmentCount == 0 || gStreams[1].segmentCount == 0)
+        return false;
+    for (i = 0; i < 2; i++) {
+        UInt16 segment = (UInt16)((UInt32)rand() % gStreams[i].segmentCount);
+        if (!Mp4StreamSeek(&gStreams[i], segment)) Fail("seek refused");
+        offsets[i] = gStreams[i].segmentsP[segment].offset;
+        gSources[i].next = offsets[i];
+        gEnded[i] = false;
+    }
+    StreamFeedSeek(f, offsets[0], offsets[1]);
+    gSeeks++;
+    return true;
+}
+
+static void TakeSample(int i)
+{
+    static UInt8 sample[SAMPLE_CAPACITY];
+    Mp4Sample s;
+    UInt16 result = Mp4StreamNext(&gStreams[i], &s, sample, sizeof(sample));
+    if (result == mp4StreamError) Fail("stream error");
+    if (result == mp4StreamEnd) gEnded[i] = true;
+    if (result != mp4StreamSample) return;
+    if (gLive && (gTaken[i] == 0 ? s.dts != 0 : s.dts <= gLastDts[i]))
+        Fail("times do not start at 0 and grow");
+    gLastDts[i] = s.dts;
+    gTaken[i]++;
 }
 
 int main(int argc, char **argv)
 {
-    if (argc == 8 && strcmp(argv[1], "--live") == 0) return LiveMain(argv + 2);
-    static UInt8 sample[SAMPLE_CAPACITY];
-    static YtFormat formats[2];
-    static Mp4Stream streams[2];
-    static Mp4ReadTrack tracks[2];
     YtClient client;
     NetJobConfig config;
     StreamFeed *f;
-    UInt8 *ringsP[2];
-    UInt32 loops, taken[2] = { 0, 0 }, ringBytes[2];
-    Boolean ended[2] = { false, false };
+    UInt32 loops;
     int i;
+    gLive = argc > 1 && strcmp(argv[1], "--live") == 0;
+    if (gLive) {
+        argc--;
+        argv++;
+    }
     if (argc != 6) {
-        fprintf(stderr, "usage: feed_test VIDEO.mp4 AUDIO.mp4 VIDEO_RING_KB "
-            "AUDIO_RING_KB SEED\n");
+        fprintf(stderr, "usage: feed_test [--live] VIDEO.mp4 AUDIO.mp4 "
+            "VIDEO_RING_KB AUDIO_RING_KB SEED\n");
         return 2;
     }
     srand((unsigned)atoi(argv[5]));
-    gSources[0].hostP = "v.example";
-    gSources[1].hostP = "a.example";
-    for (i = 0; i < 2; i++) {
-        gSources[i].dataP = Load(argv[1 + i], &gSources[i].size);
-        if (gSources[i].dataP == 0) Fail("cannot read the inputs");
-        snprintf(formats[i].url, sizeof(formats[i].url),
-            "https://%s/videoplayback?id=1", gSources[i].hostP);
-        formats[i].contentLength = gSources[i].size;
-        gSources[i].streamP = &streams[i];
-        ringBytes[i] = (UInt32)atoi(argv[3 + i]) * 1024;
-        ringsP[i] = (UInt8 *)malloc(ringBytes[i]);
-        if (Mp4StreamOpen(&streams[i], ringsP[i], ringBytes[i],
-                gSources[i].size, &tracks[i]) != mp4MergeOk)
-            Fail("cannot open a stream");
-    }
+    for (i = 0; i < 2; i++) OpenSource(i, argv[1 + i], argv[3 + i]);
     YtClientDefaults(&client);
     MemSet(&config, sizeof(config), 0);
-    /* 240p and its sound over 213 s: 36 KB/s, paced a quarter above. */
-    {
-        YtFormat video = formats[0], audio = formats[1];
-        video.contentLength = 4310122UL;
-        audio.contentLength = 3449447UL;
-        f = StreamFeedNew(&config, &client, &video, &audio, 213, false);
-        if (f == 0 || f->pace != 45500UL) Fail("pace from the bitrates");
-        StreamFeedFree(f);
-    }
-    /* Without the length, as here, the pace is the minimum. */
-    f = StreamFeedNew(&config, &client, &formats[0], &formats[1], 0, false);
-    StreamFeedStart(f, &streams[0], &streams[1], false);
-    for (loops = 0; !(ended[0] && ended[1]); loops++) {
-        Boolean waiting = false;
+    if (gLive) StartServer();
+    else TestPace(&config, &client);
+    /* Without a video's length, as here, the pace is the minimum. */
+    f = StreamFeedNew(&config, &client, &gFormats[0], &gFormats[1], 0, gLive);
+    if (f == 0 || StreamFeedLive(f) != gLive) Fail("feed not started");
+    gPace = f->pace;
+    StreamFeedStart(f, &gStreams[0], &gStreams[1], false);
+    for (loops = 0; !(gEnded[0] && gEnded[1]); loops++) {
+        Boolean waiting;
         if (loops == MAX_LOOPS) Fail("streams never finished");
         gTicks += 2;
         StreamFeedStep(f, gPlaying);
         if (StreamFeedError(f) != 0) Fail(StreamFeedError(f));
-        /* The player waits while either stream has nothing ready. */
-        for (i = 0; i < 2; i++)
-            if (!ended[i] && (!Mp4StreamReady(&streams[i]) ||
-                    (Mp4StreamBuffered(&streams[i]) < 8192 &&
-                     !Mp4StreamReceived(&streams[i]))))
-                waiting = true;
-        if (gSeeks < SEEKS && rand() % 2000 == 0 &&
-                streams[0].segmentCount != 0 && streams[1].segmentCount != 0) {
-            UInt32 offsets[2];
-            for (i = 0; i < 2; i++) {
-                UInt16 segment = (UInt16)((UInt32)rand() % streams[i].segmentCount);
-                if (!Mp4StreamSeek(&streams[i], segment)) Fail("seek refused");
-                offsets[i] = streams[i].segmentsP[segment].offset;
-                gSources[i].next = offsets[i];
-                ended[i] = false;
-            }
-            StreamFeedSeek(f, offsets[0], offsets[1]);
-            gSeeks++;
-            continue;
-        }
+        waiting = Waiting();
+        if (SeekNowAndThen(f)) continue;
         gPlaying = !waiting;
-        if (waiting) continue;
-        for (i = 0; i < 2; i++) {
-            Mp4Sample s;
-            UInt16 result;
-            if (ended[i] || loops % (i == 0 ? 3 : 2) != 0) continue;
-            result = Mp4StreamNext(&streams[i], &s, sample, sizeof(sample));
-            if (result == mp4StreamSample) taken[i]++;
-            else if (result == mp4StreamEnd) ended[i] = true;
-            else if (result == mp4StreamError) Fail("stream error");
-        }
+        for (i = 0; i < 2; i++)
+            if (gPlaying && !gEnded[i] && loops % (i == 0 ? 3 : 2) == 0)
+                TakeSample(i);
     }
-    for (i = 0; i < 2; i++)
+    for (i = 0; i < 2; i++) {
         if (gSources[i].next != gSources[i].size) Fail("a stream was cut short");
-    printf("feed ok: %u + %u samples, %d requests (%d reused, %d dropped, "
-        "%d closed), %d seeks, rings %u + %u KB\n", (unsigned)taken[0],
-        (unsigned)taken[1], gRequests, gReused, gDropped, gClosed, gSeeks,
-        (unsigned)(ringBytes[0] / 1024), (unsigned)(ringBytes[1] / 1024));
+        if (gLive && gTaken[i] != gSources[i].samples) Fail("samples missing");
+        if (gLive && StreamFeedRate(f, (UInt16)i) == 0) Fail("no rate");
+    }
+    printf("%s ok: %u + %u samples, %d requests (%d reused, %d dropped, "
+        "%d closed), %d seeks, rings %u + %u KB\n", gLive ? "live feed" : "feed",
+        (unsigned)gTaken[0], (unsigned)gTaken[1], gRequests, gReused, gDropped,
+        gClosed, gSeeks, (unsigned)gRingKb[0], (unsigned)gRingKb[1]);
+    if (gLive)
+        printf("  %d cut, %d cancelled, %d probes, %d held, %d early, "
+            "rates %u + %u B/s, %u s\n", gCut, gCancelled, gProbes, gHeld, gEarly,
+            (unsigned)StreamFeedRate(f, 0), (unsigned)StreamFeedRate(f, 1),
+            (unsigned)(gTicks / 100));
     StreamFeedFree(f);
     return 0;
 }

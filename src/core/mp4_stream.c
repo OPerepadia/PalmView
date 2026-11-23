@@ -29,7 +29,7 @@ UInt16 Mp4StreamOpen(Mp4Stream *s, UInt8 *ringP, UInt32 capacity,
     s->ringP = ringP;
     s->capacity = capacity;
     s->totalSize = totalSize;
-    s->live = totalSize == MP4_STREAM_LIVE;
+    s->haveBase = totalSize != MP4_STREAM_LIVE;
     s->trackP = trackP;
     s->boxP = (UInt8 *)MemPtrNew(MP4_STREAM_BOX_CAPACITY);
     return s->boxP != 0 ? mp4MergeOk : mp4MergeNoMemory;
@@ -46,7 +46,7 @@ void Mp4StreamClose(Mp4Stream *s)
 
 void Mp4StreamFinish(Mp4Stream *s, UInt32 end)
 {
-    if (s->live && end < s->totalSize) s->totalSize = end;
+    s->totalSize = end;
 }
 
 /* The ring */
@@ -192,25 +192,18 @@ static void ReadSidx(Mp4Stream *s, UInt32 size, UInt32 headerSize)
     s->segmentCount = count;
 }
 
-/* The fragment's start time, from its tfdt. Live times count from the
- * first fragment's; others must fit in 32 bits. */
+/* The fragment's start time, from its tfdt, counted from the base. False
+ * if it is before the base or does not fit in 32 bits. */
 static Boolean SetStartTime(Mp4Stream *s)
 {
     UInt32 high = s->iter.startTimeHigh, low = s->iter.startTime;
-    if (s->live) {
-        if (!s->haveBase) {
-            s->baseHigh = high;
-            s->baseLow = low;
-            s->haveBase = true;
-        }
-        if (high < s->baseHigh || (high == s->baseHigh && low < s->baseLow))
-            return false;
-        high -= s->baseHigh + (low < s->baseLow ? 1 : 0);
-        low -= s->baseLow;
+    if (!s->haveBase) {
+        s->baseHigh = high;
+        s->baseLow = low;
+        s->haveBase = true;
     }
-    if (high != 0) return false;
-    s->dts = low;
-    return true;
+    s->dts = low - s->baseLow;
+    return high - s->baseHigh == (low < s->baseLow ? 1 : 0);
 }
 
 /* Handles the box at next. */
@@ -237,7 +230,7 @@ static UInt16 ReadBox(Mp4Stream *s)
         return FAIL(s, mp4MergeBadInput);
 
     /* Each live segment repeats the moov. */
-    if ((type == MP4_FOURCC('m', 'o', 'o', 'v') && !(s->live && s->ready)) ||
+    if ((type == MP4_FOURCC('m', 'o', 'o', 'v') && !s->ready) ||
         type == MP4_FOURCC('m', 'o', 'o', 'f')) {
         Boolean moov = type == MP4_FOURCC('m', 'o', 'o', 'v');
         UInt32 start = s->next;
@@ -323,7 +316,8 @@ static UInt16 Advance(Mp4Stream *s, Mp4Sample *sampleP, UInt8 *bufferP,
         switch (s->state) {
             case stateSkip:
                 Drop(s, s->skipEnd);
-                if (s->readOffset < s->skipEnd) return mp4StreamWait;
+                result = mp4StreamWait;
+                if (s->readOffset < s->skipEnd) break;
                 s->next = s->skipEnd;
                 s->state = stateBox;
                 continue;
@@ -334,9 +328,8 @@ static UInt16 Advance(Mp4Stream *s, Mp4Sample *sampleP, UInt8 *bufferP,
                 result = ReadSample(s, sampleP, bufferP, capacity);
                 break;
         }
-        /* A finished live stream may stop partway into a segment. */
-        if (result == mp4StreamWait && s->live && Mp4StreamReceived(s))
-            return mp4StreamEnd;
+        /* A live stream may stop partway into a segment. */
+        if (result == mp4StreamWait && Mp4StreamReceived(s)) return mp4StreamEnd;
         if (result != CONTINUE) return result;
     }
 }

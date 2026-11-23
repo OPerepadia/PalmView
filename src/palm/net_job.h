@@ -55,6 +55,9 @@ typedef struct NetJobConfig {
     /* A successful response that leaves the connection reusable makes the
      * job idle instead of finishing it; NetJobSend sends the next request. */
     Boolean keepAlive;
+    /* The number in this response header ("X-Name:") goes in the result;
+     * 0 for none. */
+    const Char *numberHeaderP;
     UdpLog *logP;               /* 0 for no log */
 } NetJobConfig;
 
@@ -68,7 +71,7 @@ typedef struct NetJobResult {
     UInt16 platformError;
     UInt32 received;
     UInt32 contentLength;   /* from the headers, 0 without one */
-    UInt32 number;          /* the header NetJobKeepNumber names, if found */
+    UInt32 number;          /* from numberHeaderP, if found */
     Boolean hasNumber;
     UInt32 handshakeTicks;
     Boolean redirected;     /* a 3xx answer; see NetJobKeepLocation */
@@ -99,9 +102,6 @@ void NetJobSetTag(NetJob *jobP, const Char *tagP);
 /* Where a redirect's Location goes, in full. Left empty if it does not
  * fit. */
 void NetJobKeepLocation(NetJob *jobP, Char *bufferP, UInt16 capacity);
-/* Puts the number in each response's header nameP ("X-Name:") into the
- * result. nameP must stay valid. */
-void NetJobKeepNumber(NetJob *jobP, const Char *nameP);
 void NetJobCancel(NetJob *jobP);
 
 #endif

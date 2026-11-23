@@ -5,6 +5,7 @@
 
 #include "net_job.h"
 #include "palm_tls.h"
+#include "text.h"
 
 /* A polling job still tries TLS this often when the socket looks idle:
  * TLS may hold received data the socket no longer shows. */
@@ -57,7 +58,6 @@ struct NetJob {
     Boolean bufferFilled;       /* TLS may have more right away */
     Char *locationP;
     UInt16 locationCapacity;
-    const Char *numberNameP;
     const Char *tagP;
     UInt8 buffer[NET_JOB_IO_CAPACITY];
 };
@@ -297,11 +297,6 @@ void NetJobKeepLocation(NetJob *jobP, Char *bufferP, UInt16 capacity)
     if (capacity != 0) bufferP[0] = '\0';
 }
 
-void NetJobKeepNumber(NetJob *jobP, const Char *nameP)
-{
-    jobP->numberNameP = nameP;
-}
-
 /* The value of header nameP ("Name:"), or 0. */
 static const Char *FindHeader(const NetJob *jobP, const Char *nameP)
 {
@@ -334,16 +329,11 @@ static void KeepLocation(NetJob *jobP)
 static void ReadHeaders(NetJob *jobP)
 {
     NetJobResult *resultP = jobP->resultP;
-    const Char *valueP;
+    const Char *nameP = jobP->config.numberHeaderP;
+    const Char *valueP = nameP != 0 ? FindHeader(jobP, nameP) : 0;
     resultP->httpStatus = jobP->parser.statusCode;
-    if (jobP->parser.hasContentLength)
-        resultP->contentLength = jobP->parser.contentLength;
-    if (jobP->numberNameP == 0) return;
-    valueP = FindHeader(jobP, jobP->numberNameP);
-    if (valueP == 0) return;
-    for (resultP->number = 0; *valueP >= '0' && *valueP <= '9'; valueP++)
-        resultP->number = resultP->number * 10 + (UInt32)(*valueP - '0');
-    resultP->hasNumber = true;
+    resultP->contentLength = jobP->parser.contentLength;
+    resultP->hasNumber = valueP != 0 && TextParseUInt32(valueP, &resultP->number);
 }
 
 static UInt16 StepConnected(NetJob **jobPP)

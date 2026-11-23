@@ -516,13 +516,6 @@ static void OpenStreams(Playback *p)
         &p->streams[STREAM_FEED_AUDIO], p->startMs != 0);
 }
 
-/* A stream's share of the memory: its length, or a live stream's rate */
-static UInt32 RingWeight(const Playback *p, UInt16 track)
-{
-    return StreamFeedLive(p->feedP) ? StreamFeedRate(p->feedP, track) / 1024
-        : StreamFeedLength(p->feedP, track) / 1024;
-}
-
 /* Shares the memory left between the two rings, by bitrate. */
 static const Char *AllocateRings(Playback *p)
 {
@@ -531,9 +524,10 @@ static const Char *AllocateRings(Playback *p)
     MemHeapFreeBytes(0, &freeBytes, &maxChunk);
     budget = freeBytes > STREAM_RESERVE ? freeBytes - STREAM_RESERVE : 0;
     if (budget > STREAM_BUFFER_LIMIT) budget = STREAM_BUFFER_LIMIT;
-    total = RingWeight(p, STREAM_FEED_VIDEO) + RingWeight(p, STREAM_FEED_AUDIO) + 1;
+    total = StreamFeedRate(p->feedP, STREAM_FEED_VIDEO) +
+        StreamFeedRate(p->feedP, STREAM_FEED_AUDIO) + 1;
     for (i = 0; i < 2; i++) {
-        UInt32 size = budget / 1024 * RingWeight(p, i) / total * 1024;
+        UInt32 size = budget / 1024 * StreamFeedRate(p->feedP, i) / total * 1024;
         if (size < STREAM_RING_MINIMUM) size = STREAM_RING_MINIMUM;
         while ((p->ringsP[i] = (UInt8 *)ArmLargeAlloc(size)) == 0) {
             size -= size / 4;
@@ -577,17 +571,12 @@ static void CloseStreams(Playback *p)
 UInt32 PlaybackBufferedMs(const Playback *p, UInt16 track)
 {
     const Mp4Stream *s = &p->streams[track];
-    UInt32 durationMs, perSecond, from = s->readOffset, buffered;
+    UInt32 perSecond, from = s->readOffset, buffered;
     if (p->feedP == 0 || Mp4StreamReceived(s)) return 0xFFFFFFFFUL;
     if (!s->ready || s->trackP->timescale == 0) return 0;
     if (track == STREAM_FEED_AUDIO && p->audioFrom > from) from = p->audioFrom;
     buffered = s->writeOffset > from ? s->writeOffset - from : 0;
-    if (StreamFeedLive(p->feedP)) {
-        perSecond = StreamFeedRate(p->feedP, track) + 1;
-    } else {
-        durationMs = ScaleToMs(s->trackP->duration, s->trackP->timescale);
-        perSecond = s->totalSize / (durationMs / 1000UL + 1) + 1;
-    }
+    perSecond = StreamFeedRate(p->feedP, track) + 1;
     return buffered / perSecond * 1000UL + buffered % perSecond * 1000UL / perSecond;
 }
 

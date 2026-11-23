@@ -281,35 +281,40 @@ static Int16 WriteFile(void *contextP, const UInt8 *dataP, UInt16 length)
     return fwrite(dataP, 1, length, (FILE *)contextP) == length ? 0 : 1;
 }
 
-static Boolean Download(const YtFormat *formatP, const char *pathP)
+/* Passes one media reply to bodyProcP. */
+static Boolean Fetch(const YtFormat *formatP, UInt32 sequence, UInt32 start,
+                     UInt32 end, HttpBodyProc bodyProcP, FILE *fileP)
 {
     static Char request[YT_REQUEST_CAPACITY];
     Char host[128];
-    const Char *pathPartP;
-    FILE *fileP;
+    const Char *pathP;
+    UInt16 length, status;
+    if (!YtSplitUrl(formatP->url, host, sizeof(host), &pathP)) return false;
+    length = YtBuildSegmentRequest(&gClient, formatP->url, sequence, start,
+        end, false, request, sizeof(request));
+    status = HttpsExchange(host, request, length, bodyProcP, fileP);
+    if (status == 200 || status == 206) return true;
+    fprintf(stderr, "download failed: HTTP %u\n", status);
+    return false;
+}
+
+static Boolean Download(const YtFormat *formatP, const char *pathP)
+{
+    FILE *fileP = fopen(pathP, "wb");
     UInt32 offset = 0;
-    if (!YtSplitUrl(formatP->url, host, sizeof(host), &pathPartP) ||
-        (fileP = fopen(pathP, "wb")) == 0) return false;
+    if (fileP == 0) return false;
     while (offset < formatP->contentLength) {
         UInt32 end = offset + CHUNK_BYTES - 1;
-        UInt16 length, status;
         if (end >= formatP->contentLength) end = formatP->contentLength - 1;
-        length = YtBuildMediaRequest(&gClient, formatP->url, offset, end,
-            false, request, sizeof(request));
-        status = HttpsExchange(host, request, length, WriteFile, fileP);
-        if (status != 200 && status != 206) {
-            fprintf(stderr, "download failed: HTTP %u at %lu\n", status,
-                (unsigned long)offset);
-            fclose(fileP);
-            return false;
-        }
+        if (!Fetch(formatP, YT_NEWEST_SEGMENT, offset, end, WriteFile, fileP))
+            break;
         offset = (UInt32)ftell(fileP);
         fprintf(stderr, "\r%s: %lu / %lu", pathP, (unsigned long)offset,
             (unsigned long)formatP->contentLength);
     }
     fprintf(stderr, "\n");
     fclose(fileP);
-    return true;
+    return offset == formatP->contentLength;
 }
 
 static Int16 Discard(void *contextP, const UInt8 *dataP, UInt16 length)
@@ -318,59 +323,38 @@ static Int16 Discard(void *contextP, const UInt8 *dataP, UInt16 length)
     return 0;
 }
 
-/* Appends live segments from first on, whole, to pathP. */
+/* Saves live segments from first on, whole, in a row. */
 static Boolean DownloadSegments(const YtFormat *formatP, UInt32 first,
                                 UInt32 count, const char *pathP)
 {
-    static Char request[YT_REQUEST_CAPACITY];
-    Char host[128];
-    const Char *pathPartP;
-    FILE *fileP;
+    FILE *fileP = fopen(pathP, "wb");
     UInt32 i;
-    if (!YtSplitUrl(formatP->url, host, sizeof(host), &pathPartP) ||
-        (fileP = fopen(pathP, "wb")) == 0) return false;
+    if (fileP == 0) return false;
     for (i = 0; i < count; i++) {
-        UInt16 length = YtBuildSegmentRequest(&gClient, formatP->url, first + i,
-            0, YT_WHOLE_SEGMENT, false, request, sizeof(request));
-        UInt16 status = HttpsExchange(host, request, length, WriteFile, fileP);
-        if (status != 200) {
-            fprintf(stderr, "segment %lu failed: HTTP %u\n",
-                (unsigned long)(first + i), status);
-            fclose(fileP);
-            return false;
-        }
+        if (!Fetch(formatP, first + i, 0, YT_WHOLE_SEGMENT, WriteFile, fileP))
+            break;
         fprintf(stderr, "\r%s: segment %lu, %ld bytes", pathP,
             (unsigned long)(first + i), ftell(fileP));
     }
     fprintf(stderr, "\n");
     fclose(fileP);
-    return true;
+    return i == count;
 }
 
 /* Saves the last count segments of a live stream's video and sound, each
- * stream as one file of its segments in a row, and the segment length in
- * seconds in ID.live.seconds. */
+ * stream as one file of its segments in a row. */
 static int Live(const char *videoIdP, const char *dirP, UInt32 count)
 {
     static YtPlayer player;
-    static Char request[YT_REQUEST_CAPACITY];
     char videoPath[512], audioPath[512];
-    Char host[128];
-    const Char *pathPartP;
-    FILE *fileP;
-    UInt16 length, status;
     UInt32 first;
     if (!LoadPlayer(videoIdP, &player)) return 1;
     if (!player.live || !YtPlayerPlayable(&player)) {
         fprintf(stderr, "not a playable live stream\n");
         return 3;
     }
-    length = YtBuildSegmentRequest(&gClient, player.audio.url, YT_NEWEST_SEGMENT,
-        0, 0, false, request, sizeof(request));
-    YtSplitUrl(player.audio.url, host, sizeof(host), &pathPartP);
-    status = HttpsExchange(host, request, length, Discard, 0);
-    if (status != 200 || !gHasNewest) {
-        fprintf(stderr, "no newest segment: HTTP %u\n", status);
+    if (!Fetch(&player.audio, YT_NEWEST_SEGMENT, 0, 0, Discard, 0) || !gHasNewest) {
+        fprintf(stderr, "no newest segment\n");
         return 1;
     }
     first = gNewestSegment > count ? gNewestSegment - count : 0;
@@ -378,14 +362,8 @@ static int Live(const char *videoIdP, const char *dirP, UInt32 count)
         (unsigned long)gNewestSegment, (unsigned long)count, (unsigned long)first);
     snprintf(videoPath, sizeof(videoPath), "%s/%s.live.video.mp4", dirP, videoIdP);
     snprintf(audioPath, sizeof(audioPath), "%s/%s.live.audio.mp4", dirP, videoIdP);
-    if (!DownloadSegments(YtPlayerVideo(&player, 0), first, count, videoPath) ||
-        !DownloadSegments(&player.audio, first, count, audioPath))
-        return 1;
-    snprintf(videoPath, sizeof(videoPath), "%s/%s.live.seconds", dirP, videoIdP);
-    if ((fileP = fopen(videoPath, "w")) == 0) return 1;
-    fprintf(fileP, "%u\n", player.audio.segmentSeconds);
-    fclose(fileP);
-    return 0;
+    return DownloadSegments(YtPlayerVideo(&player, 0), first, count, videoPath) &&
+        DownloadSegments(&player.audio, first, count, audioPath) ? 0 : 1;
 }
 
 /* Host implementation of the merge I/O interface. */

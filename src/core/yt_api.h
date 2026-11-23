@@ -103,8 +103,8 @@ UInt16 YtBuildSegmentRequest(const YtClient *clientP, const Char *urlP,
 UInt16 YtBuildThumbRequest(const YtClient *clientP, const Char *videoIdP,
                            Boolean keepAlive, Char *requestP, UInt16 capacity);
 /* Replaces a stream URL with where a redirect sent it, without the range
- * and segment parameters the redirect carries. False, leaving urlP alone, if locationP
- * is not https or does not fit. */
+ * and segment parameters the redirect carries. False, leaving urlP alone,
+ * if locationP is not https or does not fit. */
 Boolean YtApplyRedirect(Char *urlP, UInt16 capacity, const Char *locationP);
 
 typedef struct YtFormat {
@@ -131,16 +131,10 @@ typedef struct YtPlayer {
     Boolean audioDefault;
     YtFormat video[YT_VIDEO_CHOICES];   /* by videoItags; found if offered */
     YtFormat audio;
-    /* The adaptive format being read. */
-    UInt16 curItag;
-    UInt32 curLength;
-    UInt32 curIndexEnd;
-    UInt32 curBitrate;
-    UInt16 curSegmentSeconds;
-    Boolean curHasUrl;
+    /* The adaptive format being read; found once it has a URL. */
+    YtFormat cur;
     Boolean curUnusable;
     Boolean curDefault;     /* audioTrack is the default language */
-    Char curUrl[YT_URL_CAPACITY];
     const TextCodec *codecP;    /* for the text above */
 } YtPlayer;
 
